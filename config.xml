@@ -1,0 +1,7 @@
+<disknode>
+    <ip>127.0.0.1</ip>
+    <port>8001</port>
+    <storagePath>./data/disk1</storagePath>
+    <blockSize>4096</blockSize>
+</disknode>
+
