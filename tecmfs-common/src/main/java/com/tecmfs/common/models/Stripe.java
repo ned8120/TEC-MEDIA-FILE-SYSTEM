@@ -1,4 +1,5 @@
 package com.tecmfs.common.models;
+
 /**
  * Representa un stripe en RAID 5 - un conjunto de bloques distribuidos entre los nodos
  * incluyendo bloques de datos y un bloque de paridad

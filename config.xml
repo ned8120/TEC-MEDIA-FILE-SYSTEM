@@ -1,7 +1,9 @@
-<disknode>
-    <ip>127.0.0.1</ip>
-    <port>8001</port>
-    <storagePath>./data/disk1</storagePath>
+<controller>
+    <port>7000</port>
     <blockSize>4096</blockSize>
-</disknode>
-
+    <monitorInterval>60</monitorInterval>
+    <diskNodes>
+        <node>http://127.0.0.1:8001</node>
+        <node>http://127.0.0.1:8002</node>
+    </diskNodes>
+</controller>
