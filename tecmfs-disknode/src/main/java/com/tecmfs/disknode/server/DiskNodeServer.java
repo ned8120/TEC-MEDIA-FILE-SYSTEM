@@ -22,6 +22,8 @@ public class DiskNodeServer {
         server = HttpServer.create(addr, 0);
         server.createContext("/storeBlock", new StoreHandler());
         server.createContext("/getBlock", new GetHandler());
+        server.createContext("/deleteBlock", new DeleteHandler());
+
         server.setExecutor(null);
     }
 
@@ -110,6 +112,58 @@ public class DiskNodeServer {
     /**
      * Handler para recuperar un bloque.
      */
+
+    class DeleteHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) {
+            logger.info("Solicitud recibida: " + exchange.getRequestMethod() + " " + exchange.getRequestURI());
+            if (!"DELETE".equals(exchange.getRequestMethod())) {
+                try {
+                    exchange.sendResponseHeaders(405, -1);
+                } catch (IOException e) {
+                    logger.severe("Método no permitido: " + e.getMessage());
+                } finally {
+                    exchange.close();
+                }
+                return;
+            }
+
+            Map<String, String> params = queryToMap(exchange.getRequestURI().getQuery());
+            String blockId = params.get("blockId");
+            if (blockId == null || blockId.isEmpty()) {
+                try {
+                    exchange.sendResponseHeaders(400, -1);
+                } catch (IOException e) {
+                    logger.severe("Solicitud inválida: " + e.getMessage());
+                } finally {
+                    exchange.close();
+                }
+                return;
+            }
+
+            Path file = Paths.get(config.getStoragePath(), blockId + ".blk");
+            try {
+                if (Files.deleteIfExists(file)) {
+                    exchange.sendResponseHeaders(200, 0);
+                    try (OutputStream os = exchange.getResponseBody()) {
+                        os.write("Bloque eliminado".getBytes());
+                    }
+                } else {
+                    exchange.sendResponseHeaders(404, -1);
+                }
+            } catch (IOException e) {
+                logger.severe("Error al eliminar bloque: " + e.getMessage());
+                try {
+                    exchange.sendResponseHeaders(500, -1);
+                } catch (IOException ex) {
+                    logger.severe("Error al responder: " + ex.getMessage());
+                }
+            } finally {
+                exchange.close();
+            }
+        }
+    }
+
     class GetHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) {

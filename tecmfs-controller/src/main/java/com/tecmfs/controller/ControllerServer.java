@@ -18,7 +18,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.logging.Logger;
-
+import java.net.URL;
+import java.net.HttpURLConnection;
 /**
  * Servidor HTTP del Controller Node.
  * Maneja endpoints para subir, descargar archivos y consultar estado de nodos.
@@ -46,6 +47,9 @@ public class ControllerServer {
         server.createContext("/uploadFile", new UploadHandler());
         server.createContext("/downloadFile", new DownloadHandler());
         server.createContext("/nodeStatus", new NodeStatusHandler());
+        server.createContext("/listFiles", new ListFilesHandler());
+        server.createContext("/deleteFile", new DeleteHandler());
+
         server.setExecutor(null);
     }
 
@@ -143,6 +147,81 @@ public class ControllerServer {
             } finally {
                 exchange.close();
             }
+        }
+    }
+    class ListFilesHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if (!"GET".equals(exchange.getRequestMethod())) {
+                exchange.sendResponseHeaders(405, -1);
+                exchange.close();
+                return;
+            }
+
+            List<StoredFile> files = metadataManager.getAllStoredFiles();
+            StringBuilder sb = new StringBuilder("[");
+            for (int i = 0; i < files.size(); i++) {
+                StoredFile f = files.get(i);
+                sb.append("{\"fileId\":\"").append(f.getFileId())
+                        .append("\",\"fileName\":\"").append(f.getFileName()).append("\"}");
+                if (i < files.size() - 1) sb.append(",");
+            }
+            sb.append("]");
+            byte[] bytes = sb.toString().getBytes();
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(bytes);
+            }
+            exchange.close();
+        }
+    }
+    class DeleteHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if (!"DELETE".equals(exchange.getRequestMethod())) {
+                exchange.sendResponseHeaders(405, -1);
+                exchange.close();
+                return;
+            }
+
+            Map<String, String> params = queryToMap(exchange.getRequestURI().getQuery());
+            String fileId = params.get("fileId");
+            if (fileId == null || fileId.isEmpty()) {
+                exchange.sendResponseHeaders(400, -1);
+                exchange.close();
+                return;
+            }
+
+            StoredFile sf = metadataManager.getStoredFile(fileId);
+            if (sf == null) {
+                exchange.sendResponseHeaders(404, -1);
+                exchange.close();
+                return;
+            }
+
+            // Enviar orden de borrar a cada nodo
+            for (Stripe stripe : sf.getStripes()) {
+                for (int i = 0; i < config.getDiskNodeEndpoints().size(); i++) {
+                    Block b = stripe.getBlock(i);
+                    if (b != null) {
+                        try {
+                            URL url = new URL(config.getDiskNodeEndpoints().get(i) +
+                                    "/deleteBlock?blockId=" + b.getBlockId());
+                            HttpURLConnection c = (HttpURLConnection) url.openConnection();
+                            c.setRequestMethod("DELETE");
+                            c.getResponseCode();
+                            c.disconnect();
+                        } catch (Exception e) {
+                            logger.warning("Error eliminando bloque en nodo " + i + ": " + e.getMessage());
+                        }
+                    }
+                }
+            }
+
+            metadataManager.getAllStoredFiles().remove(sf);
+            exchange.sendResponseHeaders(200, -1);
+            exchange.close();
         }
     }
 
