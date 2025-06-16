@@ -39,6 +39,8 @@ public class DiskNodeServer {
         }
     }
 
+
+
     /**
      * Handler para almacenar un bloque.
      */
@@ -245,10 +247,19 @@ public class DiskNodeServer {
     public static void main(String[] args) {
         Logger logger = Logger.getLogger(DiskNodeServer.class.getName());
         try {
-            DiskNodeConfig cfg = DiskNodeConfig.loadFromFile("config.xml");
-            new DiskNodeServer(cfg).start();
+            List<DiskNodeConfig> configs = DiskNodeConfig.loadAllFromFile("config.xml");
+            for (DiskNodeConfig cfg : configs) {
+                new Thread(() -> {
+                    try {
+                        new DiskNodeServer(cfg).start();
+                    } catch (Exception e) {
+                        logger.severe("Error al iniciar nodo en puerto " + cfg.getPort() + ": " + e.getMessage());
+                    }
+                }).start();
+            }
         } catch (Exception e) {
-            logger.severe("Error al iniciar el servidor: " + e.getMessage());
+            logger.severe("Error al leer la configuración: " + e.getMessage());
         }
     }
+
 }

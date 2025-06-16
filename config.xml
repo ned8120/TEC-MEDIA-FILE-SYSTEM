@@ -5,5 +5,7 @@
     <diskNodes>
         <node>http://127.0.0.1:8001</node>
         <node>http://127.0.0.1:8002</node>
+        <node>http://127.0.0.1:8003</node>
+        <node>http://127.0.0.1:8004</node>
     </diskNodes>
 </controller>

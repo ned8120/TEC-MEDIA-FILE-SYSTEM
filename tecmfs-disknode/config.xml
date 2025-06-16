@@ -1,0 +1,26 @@
+<diskNodesConfig>
+    <node>
+        <ip>127.0.0.1</ip>
+        <port>8001</port>
+        <storagePath>./storage1</storagePath>
+        <blockSize>4096</blockSize>
+    </node>
+    <node>
+        <ip>127.0.0.1</ip>
+        <port>8002</port>
+        <storagePath>./storage2</storagePath>
+        <blockSize>4096</blockSize>
+    </node>
+    <node>
+        <ip>127.0.0.1</ip>
+        <port>8003</port>
+        <storagePath>./storage3</storagePath>
+        <blockSize>4096</blockSize>
+    </node>
+    <node>
+        <ip>127.0.0.1</ip>
+        <port>8004</port>
+        <storagePath>./storage4</storagePath>
+        <blockSize>4096</blockSize>
+    </node>
+</diskNodesConfig>
