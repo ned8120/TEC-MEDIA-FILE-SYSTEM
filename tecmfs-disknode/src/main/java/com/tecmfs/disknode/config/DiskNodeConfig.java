@@ -26,6 +26,9 @@ public class DiskNodeConfig {
         this.blockSize = blockSize;
     }
 
+
+
+
     public static DiskNodeConfig loadFromFile(String xmlPath)
             throws ParserConfigurationException, SAXException, IOException {
         List<DiskNodeConfig> configs = loadAllFromFile(xmlPath);
@@ -36,6 +39,7 @@ public class DiskNodeConfig {
     /**
      * Carga todas las configuraciones de nodos desde un único XML.
      */
+
     public static List<DiskNodeConfig> loadAllFromFile(String xmlPath)
             throws ParserConfigurationException, SAXException, IOException {
         List<DiskNodeConfig> configList = new ArrayList<>();
@@ -84,15 +88,11 @@ public class DiskNodeConfig {
     }
 
     private static String getTagValue(Element parent, String tagName) {
-        NodeList children = parent.getChildNodes();
-        for (int i = 0; i < children.getLength(); i++) {
-            Node child = children.item(i);
-            if (child.getNodeType() == Node.ELEMENT_NODE && child.getNodeName().equals(tagName)) {
-                return child.getTextContent().trim();
-            }
-        }
-        return "";
+        NodeList list = parent.getElementsByTagName(tagName);
+        if (list.getLength() == 0 || list.item(0) == null) return "";
+        return list.item(0).getTextContent().trim();
     }
+
 
     // Getters
     public String getIp() { return ip; }

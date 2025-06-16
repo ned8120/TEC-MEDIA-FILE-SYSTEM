@@ -14,7 +14,7 @@ import java.util.logging.Logger;
 public class DiskNodeServer {
     private static final Logger logger = Logger.getLogger(DiskNodeServer.class.getName());
     private final DiskNodeConfig config;
-    private HttpServer server;
+    private final HttpServer server;
 
     public DiskNodeServer(DiskNodeConfig config) throws IOException {
         this.config = config;
@@ -23,7 +23,6 @@ public class DiskNodeServer {
         server.createContext("/storeBlock", new StoreHandler());
         server.createContext("/getBlock", new GetHandler());
         server.createContext("/deleteBlock", new DeleteHandler());
-
         server.setExecutor(null);
     }
 
