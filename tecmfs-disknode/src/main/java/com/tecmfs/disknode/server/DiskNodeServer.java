@@ -92,6 +92,7 @@ public class DiskNodeServer {
                         logger.warning("Tamaño de datos recibido (" + total + ") difiere de blockSize (" + config.getBlockSize() + ").");
                     }
                 }
+                logger.info("Bloque guardado exitosamente en: " + target.toAbsolutePath());
 
                 exchange.sendResponseHeaders(200, 0);
                 try (OutputStream os2 = exchange.getResponseBody()) {
@@ -108,13 +109,14 @@ public class DiskNodeServer {
                 exchange.close();
             }
         }
+
     }
 
     /**
      * Handler para recuperar un bloque.
      */
 
-    class DeleteHandler implements HttpHandler {
+class DeleteHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) {
             logger.info("Solicitud recibida: " + exchange.getRequestMethod() + " " + exchange.getRequestURI());
@@ -246,7 +248,7 @@ public class DiskNodeServer {
     public static void main(String[] args) {
         Logger logger = Logger.getLogger(DiskNodeServer.class.getName());
         try {
-            List<DiskNodeConfig> configs = DiskNodeConfig.loadAllFromFile("config.xml");
+            List<DiskNodeConfig> configs = DiskNodeConfig.loadAllFromFile("tecmfs-disknode/disknodes.xml");
             for (DiskNodeConfig cfg : configs) {
                 new Thread(() -> {
                     try {

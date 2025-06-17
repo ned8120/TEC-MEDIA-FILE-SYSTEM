@@ -57,6 +57,14 @@ public class FileDistributor {
                 if(idx<dataBlocks.size()) slice.add(dataBlocks.get(idx++));
                 else slice.add(new byte[blockSize]);
             }
+            for (int i = 0; i < slice.size(); i++) {
+                byte[] b = slice.get(i);
+                if (b.length != blockSize) {
+                    byte[] padded = new byte[blockSize];
+                    System.arraycopy(b, 0, padded, 0, b.length);
+                    slice.set(i, padded);
+                }
+            }
             byte[] par = ParityCalculator.calculateParity(slice);
             Stripe stripe=new Stripe(fileId+"_s"+s,fileId,s);
             int parityPos=s%n, di=0;

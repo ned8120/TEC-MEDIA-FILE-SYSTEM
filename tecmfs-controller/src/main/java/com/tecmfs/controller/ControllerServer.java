@@ -157,8 +157,19 @@ public class ControllerServer {
                 exchange.close();
                 return;
             }
+            Map<String, String> params = queryToMap(exchange.getRequestURI().getQuery());
+            String nameFilter = params.get("name"); // puede ser null
 
             List<StoredFile> files = metadataManager.getAllStoredFiles();
+
+
+            if (nameFilter != null && !nameFilter.isEmpty()) {
+                String lowerFilter = nameFilter.toLowerCase();
+                files = files.stream()
+                        .filter(f -> f.getFileName().toLowerCase().contains(lowerFilter))
+                        .toList(); // Requiere Java 16+, usa `.collect(Collectors.toList())` si usas Java 8-11
+            }
+
             StringBuilder sb = new StringBuilder("[");
             for (int i = 0; i < files.size(); i++) {
                 StoredFile f = files.get(i);
@@ -206,12 +217,21 @@ public class ControllerServer {
                     Block b = stripe.getBlock(i);
                     if (b != null) {
                         try {
-                            URL url = new URL(config.getDiskNodeEndpoints().get(i) +
-                                    "/deleteBlock?blockId=" + b.getBlockId());
-                            HttpURLConnection c = (HttpURLConnection) url.openConnection();
-                            c.setRequestMethod("DELETE");
-                            c.getResponseCode();
-                            c.disconnect();
+                            String nodeUrl = config.getDiskNodeEndpoints().get(i);
+                            String fullUrl = nodeUrl + "/deleteBlock?blockId=" + b.getBlockId();
+                            logger.info("Enviando DELETE a: " + fullUrl);
+
+                            try {
+                                URL url = new URL(fullUrl);
+                                HttpURLConnection c = (HttpURLConnection) url.openConnection();
+                                c.setRequestMethod("DELETE");
+                                int responseCode = c.getResponseCode();
+                                logger.info("Respuesta desde " + nodeUrl + ": " + responseCode);
+                                c.disconnect();
+                            } catch (Exception e) {
+                                logger.warning("Error al enviar DELETE a " + fullUrl + ": " + e.getMessage());
+                            }
+
                         } catch (Exception e) {
                             logger.warning("Error eliminando bloque en nodo " + i + ": " + e.getMessage());
                         }
@@ -219,7 +239,7 @@ public class ControllerServer {
                 }
             }
 
-            metadataManager.getAllStoredFiles().remove(sf);
+            metadataManager.removeFile(fileId);
             exchange.sendResponseHeaders(200, -1);
             exchange.close();
         }

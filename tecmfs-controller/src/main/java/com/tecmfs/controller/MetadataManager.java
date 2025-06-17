@@ -28,6 +28,7 @@ public class MetadataManager {
         logger.info("StoredFile registrado: " + storedFile.getFileId());
     }
 
+
     /**
      * Recupera un StoredFile por su ID.
      * (Actualmente no se usa, pero puede ser útil para descargar/reconstruir)
@@ -59,6 +60,10 @@ public class MetadataManager {
     /**
      * Obtiene el estado de todos los Disk Nodes.
      */
+    public void removeFile(String fileId) {
+        filesMap.remove(fileId);
+        logger.info("StoredFile eliminado: " + fileId);
+    }
     public List<NodeStatus> getAllNodeStatus() {
         return new ArrayList<>(nodeStatusMap.values());
     }

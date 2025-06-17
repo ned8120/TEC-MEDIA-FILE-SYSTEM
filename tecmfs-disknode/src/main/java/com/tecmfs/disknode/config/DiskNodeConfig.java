@@ -49,7 +49,7 @@ public class DiskNodeConfig {
         Document doc = db.parse(new File(xmlPath));
         Element root = doc.getDocumentElement();
 
-        NodeList nodeList = root.getElementsByTagName("node");
+        NodeList nodeList = root.getElementsByTagName("diskNode");
         System.out.println("Cantidad de nodos leídos: " + nodeList.getLength());
         for (int i = 0; i < nodeList.getLength(); i++) {
             Node n = nodeList.item(i);
@@ -60,6 +60,8 @@ public class DiskNodeConfig {
             String portStr = getTagValue(node, "port");
             String storage = getTagValue(node, "storagePath");
             String bsStr = getTagValue(node, "blockSize");
+            System.out.println("Debug Nodo #" + i + ": ip=[" + ip + "] port=[" + portStr + "] storage=[" + storage + "] blockSize=[" + bsStr + "]");
+
 
             if (ip.isEmpty() || portStr.isEmpty() || storage.isEmpty() || bsStr.isEmpty()) {
                 logger.warning("Nodo omitido: algún campo está vacío (ip, port, storagePath o blockSize).");
@@ -82,6 +84,7 @@ public class DiskNodeConfig {
 
             configList.add(new DiskNodeConfig(ip, port, storage, bs));
             logger.info("Nodo cargado: " + ip + ":" + port + " → " + storage + " [" + bs + " bytes]");
+
         }
 
         return configList;
