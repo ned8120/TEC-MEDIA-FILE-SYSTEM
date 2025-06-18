@@ -19,7 +19,7 @@ public class DiskNodeConfig {
     private final String storagePath;
     private final int blockSize;
 
-    private DiskNodeConfig(String ip, int port, String storagePath, int blockSize) {
+    public DiskNodeConfig(String ip, int port, String storagePath, int blockSize) {
         this.ip = ip;
         this.port = port;
         this.storagePath = storagePath;

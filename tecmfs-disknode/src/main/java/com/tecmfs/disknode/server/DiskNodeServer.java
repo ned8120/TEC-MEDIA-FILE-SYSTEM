@@ -23,6 +23,8 @@ public class DiskNodeServer {
         server.createContext("/storeBlock", new StoreHandler());
         server.createContext("/getBlock", new GetHandler());
         server.createContext("/deleteBlock", new DeleteHandler());
+        server.createContext("/shutdown", new ShutdownHandler());
+
         server.setExecutor(null);
     }
 
@@ -231,6 +233,43 @@ class DeleteHandler implements HttpHandler {
             }
         }
     }
+    class ShutdownHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) {
+            logger.info("Solicitud de apagado recibida.");
+            if (!"POST".equals(exchange.getRequestMethod())) {
+                try {
+                    exchange.sendResponseHeaders(405, -1);
+                } catch (IOException e) {
+                    logger.severe("Método no permitido: " + e.getMessage());
+                } finally {
+                    exchange.close();
+                }
+                return;
+            }
+
+            try {
+                exchange.sendResponseHeaders(200, 0);
+                exchange.getResponseBody().write("Apagando nodo...".getBytes());
+                exchange.getResponseBody().close();
+
+                // Apagar servidor después de un pequeño retraso para enviar la respuesta
+                new Thread(() -> {
+                    try {
+                        Thread.sleep(200); // permite que la respuesta llegue antes del apagado
+                        server.stop(0);
+                        logger.info("Nodo apagado correctamente.");
+                    } catch (InterruptedException ignored) {}
+                }).start();
+
+            } catch (IOException e) {
+                logger.severe("Error durante apagado: " + e.getMessage());
+            } finally {
+                exchange.close();
+            }
+        }
+    }
+
 
     private static Map<String, String> queryToMap(String query) {
         Map<String, String> map = new HashMap<>();
@@ -247,9 +286,47 @@ class DeleteHandler implements HttpHandler {
      */
     public static void main(String[] args) {
         Logger logger = Logger.getLogger(DiskNodeServer.class.getName());
+
+        // Modo personalizado: iniciar un solo nodo
+        if (args.length > 0 && args[0].startsWith("--port=")) {
+            String portStr = null, storagePath = null;
+            for (String arg : args) {
+                if (arg.startsWith("--port=")) {
+                    portStr = arg.substring("--port=".length());
+                } else if (arg.startsWith("--storage=")) {
+                    storagePath = arg.substring("--storage=".length());
+                }
+            }
+
+            if (portStr == null || storagePath == null) {
+                logger.severe("Faltan argumentos. Uso esperado: --port=8001 --storage=./storage1");
+                return;
+            }
+
+            try {
+                int port = Integer.parseInt(portStr);
+                DiskNodeConfig cfg = new DiskNodeConfig("127.0.0.1", port, storagePath, 4096); // Usa blockSize fijo
+                new DiskNodeServer(cfg).start();
+            } catch (Exception e) {
+                logger.severe("Error al iniciar nodo personalizado: " + e.getMessage());
+            }
+            return;
+        }
+
+        // Modo por defecto: cargar desde XML y omitir algunos nodos
         try {
+            Set<Integer> omitidos = new HashSet<>();
+            for (String arg : args) {
+                omitidos.add(Integer.parseInt(arg)); // Puertos omitidos
+            }
+
             List<DiskNodeConfig> configs = DiskNodeConfig.loadAllFromFile("tecmfs-disknode/disknodes.xml");
             for (DiskNodeConfig cfg : configs) {
+                if (omitidos.contains(cfg.getPort())) {
+                    logger.info("Nodo en puerto " + cfg.getPort() + " fue omitido por simulación de falla.");
+                    continue;
+                }
+
                 new Thread(() -> {
                     try {
                         new DiskNodeServer(cfg).start();
@@ -259,7 +336,7 @@ class DeleteHandler implements HttpHandler {
                 }).start();
             }
         } catch (Exception e) {
-            logger.severe("Error al leer la configuración: " + e.getMessage());
+            logger.severe("Error al leer configuración: " + e.getMessage());
         }
     }
 
