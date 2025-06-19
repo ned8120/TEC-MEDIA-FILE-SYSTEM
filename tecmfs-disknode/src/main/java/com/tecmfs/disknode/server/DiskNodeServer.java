@@ -23,6 +23,7 @@ public class DiskNodeServer {
         server.createContext("/storeBlock", new StoreHandler());
         server.createContext("/getBlock", new GetHandler());
         server.createContext("/deleteBlock", new DeleteHandler());
+        server.createContext("/nodeStatus", new StatusHandler());
         server.createContext("/shutdown", new ShutdownHandler());
 
         server.setExecutor(null);
@@ -34,7 +35,8 @@ public class DiskNodeServer {
     public void start() {
         try {
             server.start();
-            logger.info("DiskNode escuchando en " + config.getIp() + ":" + config.getPort());
+            logger.info("DiskNode iniciado en " + config.getIp() + ":" + config.getPort()
+                    + " con capacidad=" + config.getCapacityBytes() + " bytes");
         } catch (Exception e) {
             logger.severe("Error al iniciar el servidor: " + e.getMessage());
         }
@@ -71,6 +73,20 @@ public class DiskNodeServer {
                     exchange.close();
                 }
                 return;
+            }
+
+            Path root = Paths.get(config.getStoragePath());
+            try {
+                long usedBytes = Files.list(root)
+                        .mapToLong(p -> p.toFile().length())
+                        .sum();
+                // Prever tamaño de bloque fija
+                if (usedBytes + config.getBlockSize() > config.getCapacityBytes()) {
+                    exchange.sendResponseHeaders(400, -1); // Storage Insufficient
+                    return;
+                }
+            } catch (IOException e) {
+                logger.warning("No se pudo calcular espacio usado: " + e.getMessage());
             }
 
             Path target = Paths.get(config.getStoragePath(), blockId + ".blk");
@@ -112,6 +128,21 @@ public class DiskNodeServer {
             }
         }
 
+    }
+class StatusHandler implements HttpHandler {
+        @Override public void handle(HttpExchange ex) throws IOException {
+            if (!"GET".equals(ex.getRequestMethod())) { ex.sendResponseHeaders(405,-1); return; }
+
+            long used = Files.list(Paths.get(config.getStoragePath()))
+                    .mapToLong(p -> p.toFile().length()).sum();
+            String json = String.format(
+                    "{\"status\":\"active\",\"blockSize\":%d,\"capacityBytes\":%d,\"usedBytes\":%d}",
+                    config.getBlockSize(), config.getCapacityBytes(), used);
+
+            ex.getResponseHeaders().add("Content-Type", "application/json");
+            ex.sendResponseHeaders(200, json.getBytes().length);
+            try (OutputStream os = ex.getResponseBody()) { os.write(json.getBytes()); }
+        }
     }
 
     /**
@@ -233,6 +264,7 @@ class DeleteHandler implements HttpHandler {
             }
         }
     }
+
     class ShutdownHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) {
@@ -305,7 +337,7 @@ class DeleteHandler implements HttpHandler {
 
             try {
                 int port = Integer.parseInt(portStr);
-                DiskNodeConfig cfg = new DiskNodeConfig("127.0.0.1", port, storagePath, 4096); // Usa blockSize fijo
+                DiskNodeConfig cfg = new DiskNodeConfig("127.0.0.1", port, storagePath, 4096,1073741824); // Usa blockSize fijo
                 new DiskNodeServer(cfg).start();
             } catch (Exception e) {
                 logger.severe("Error al iniciar nodo personalizado: " + e.getMessage());
