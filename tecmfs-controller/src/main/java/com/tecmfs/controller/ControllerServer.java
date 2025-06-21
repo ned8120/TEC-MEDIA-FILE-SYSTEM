@@ -17,9 +17,12 @@ import java.net.InetSocketAddress;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.logging.Logger;
 import java.net.URL;
 import java.net.HttpURLConnection;
+import java.util.stream.Collectors;
+
 /**
  * Servidor HTTP del Controller Node.
  * Maneja endpoints para subir, descargar archivos y consultar estado de nodos.
@@ -49,6 +52,7 @@ public class ControllerServer {
         server.createContext("/nodeStatus", new NodeStatusHandler());
         server.createContext("/listFiles", new ListFilesHandler());
         server.createContext("/deleteFile", new DeleteHandler());
+        server.createContext("/getNodes", new GetNodesHandler());  // Nuevo endpoint
 
         server.setExecutor(null);
     }
@@ -149,6 +153,7 @@ public class ControllerServer {
             }
         }
     }
+
     class ListFilesHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
@@ -167,7 +172,7 @@ public class ControllerServer {
                 String lowerFilter = nameFilter.toLowerCase();
                 files = files.stream()
                         .filter(f -> f.getFileName().toLowerCase().contains(lowerFilter))
-                        .toList(); // Requiere Java 16+, usa `.collect(Collectors.toList())` si usas Java 8-11
+                        .collect(Collectors.toList());
             }
 
             StringBuilder sb = new StringBuilder("[");
@@ -187,6 +192,7 @@ public class ControllerServer {
             exchange.close();
         }
     }
+
     class DeleteHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
@@ -291,6 +297,28 @@ public class ControllerServer {
         }
     }
 
+    class GetNodesHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if (!"GET".equals(exchange.getRequestMethod())) {
+                exchange.sendResponseHeaders(405, -1);
+                exchange.close();
+                return;
+            }
+            Set<String> nodes = nodeMonitor.getAvailableNodes();
+            String json = nodes.stream()
+                    .map(u -> "\"" + u + "\"")
+                    .collect(Collectors.joining(",", "[", "]"));
+
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            byte[] resp = json.getBytes();
+            exchange.sendResponseHeaders(200, resp.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(resp);
+            }
+        }
+    }
+
     /**
      * Parseo simple de query string.
      */
@@ -312,11 +340,11 @@ public class ControllerServer {
         try {
             ControllerConfig cfg = ControllerConfig.loadFromFile("config.xml");
             MetadataManager mm = new MetadataManager();
-            FileDistributor fd = new FileDistributor(mm, cfg);
             NodeMonitor nm = new NodeMonitor(
                     "tecmfs-disknode/disknodes.xml",
                     cfg.getMonitorInterval()
             );
+            FileDistributor fd = new FileDistributor(mm, cfg, nm);
             ControllerServer server = new ControllerServer(cfg, mm, fd, nm);
             server.start();
         } catch (Exception e) {
@@ -324,4 +352,3 @@ public class ControllerServer {
         }
     }
 }
-

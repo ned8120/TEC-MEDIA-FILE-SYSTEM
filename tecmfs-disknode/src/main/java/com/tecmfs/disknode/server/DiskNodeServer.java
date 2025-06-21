@@ -1,12 +1,29 @@
 package com.tecmfs.disknode.server;
 
 import com.tecmfs.disknode.config.DiskNodeConfig;
-import com.sun.net.httpserver.*;
-import java.io.*;
+import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpHandler;
+import com.sun.net.httpserver.HttpServer;
+import org.xml.sax.SAXException;
+
+import javax.xml.parsers.ParserConfigurationException;
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.InetSocketAddress;
-import java.nio.file.*;
-import java.util.*;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.logging.Logger;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
 
 /**
  * Servidor HTTP liviano que maneja almacenamiento y recuperación de bloques en disco.
@@ -131,23 +148,46 @@ public class DiskNodeServer {
     }
     /**
      * Handler para estado del nodo.
-     * Devuelve JSON con: status, blockSize, capacityBytes, usedBytes.
+     * Devuelve JSON con: status, blockCount, usedBytes, blockSize, capacityBytes.
      */
     class StatusHandler implements HttpHandler {
-        @Override public void handle(HttpExchange exchange) throws IOException {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
             if (!"GET".equals(exchange.getRequestMethod())) {
                 exchange.sendResponseHeaders(405, -1);
                 return;
             }
-            Path storageDir = Paths.get(config.getStoragePath());
-            long usedBytes = Files.walk(storageDir)
-                    .filter(Files::isRegularFile)
-                    .mapToLong(p -> p.toFile().length())
-                    .sum();
+
+            Path dir = Paths.get(config.getStoragePath());
+            long blockCount;
+            long usedBytes;
+            // Contar sólo archivos .blk
+            try (Stream<Path> listing = Files.list(dir)) {
+                blockCount = listing
+                        .filter(p -> p.toString().endsWith(".blk"))
+                        .count();
+            }
+            // Sumar todos los bytes de archivos regulares en subdirectorios
+            try (Stream<Path> walk = Files.walk(dir)) {
+                usedBytes = walk
+                        .filter(Files::isRegularFile)
+                        .mapToLong(p -> p.toFile().length())
+                        .sum();
+            }
+
             String json = String.format(
-                    "{\"status\":\"active\",\"blockSize\":%d,\"capacityBytes\":%d,\"usedBytes\":%d}",
-                    config.getBlockSize(), config.getCapacityBytes(), usedBytes);
-            exchange.getResponseHeaders().add("Content-Type","application/json");
+                    "{\"status\":\"active\","
+                            + "\"blockCount\":%d,"
+                            + "\"usedBytes\":%d,"
+                            + "\"blockSize\":%d,"
+                            + "\"capacityBytes\":%d}",
+                    blockCount,
+                    usedBytes,
+                    config.getBlockSize(),
+                    config.getCapacityBytes()
+            );
+
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
             byte[] resp = json.getBytes();
             exchange.sendResponseHeaders(200, resp.length);
             try (OutputStream os = exchange.getResponseBody()) {
@@ -155,6 +195,36 @@ public class DiskNodeServer {
             }
         }
     }
+
+    /**
+     * Handler para apagar el servidor de forma controlada.
+     */
+    class ShutdownHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if (!"POST".equals(exchange.getRequestMethod())) {
+                exchange.sendResponseHeaders(405, -1);
+                return;
+            }
+            exchange.sendResponseHeaders(200, 0);
+            exchange.getResponseBody().close();
+            new Thread(() -> {
+                try { Thread.sleep(200); server.stop(0); }
+                catch (InterruptedException ignored) {}
+            }).start();
+        }
+    }
+
+    private static Map<String, String> queryToMap(String query) {
+        Map<String, String> map = new HashMap<>();
+        if (query == null || query.isEmpty()) return map;
+        for (String param : query.split("&")) {
+            String[] parts = param.split("=");
+            if (parts.length > 1) map.put(parts[0], parts[1]);
+        }
+        return map;
+    }
+
     /**
      * Handler para recuperar un bloque.
      */
@@ -275,111 +345,25 @@ class DeleteHandler implements HttpHandler {
         }
     }
 
-    class ShutdownHandler implements HttpHandler {
-        @Override
-        public void handle(HttpExchange exchange) {
-            logger.info("Solicitud de apagado recibida.");
-            if (!"POST".equals(exchange.getRequestMethod())) {
-                try {
-                    exchange.sendResponseHeaders(405, -1);
-                } catch (IOException e) {
-                    logger.severe("Método no permitido: " + e.getMessage());
-                } finally {
-                    exchange.close();
-                }
-                return;
-            }
-
-            try {
-                exchange.sendResponseHeaders(200, 0);
-                exchange.getResponseBody().write("Apagando nodo...".getBytes());
-                exchange.getResponseBody().close();
-
-                // Apagar servidor después de un pequeño retraso para enviar la respuesta
-                new Thread(() -> {
-                    try {
-                        Thread.sleep(200); // permite que la respuesta llegue antes del apagado
-                        server.stop(0);
-                        logger.info("Nodo apagado correctamente.");
-                    } catch (InterruptedException ignored) {}
-                }).start();
-
-            } catch (IOException e) {
-                logger.severe("Error durante apagado: " + e.getMessage());
-            } finally {
-                exchange.close();
-            }
-        }
-    }
-
-
-    private static Map<String, String> queryToMap(String query) {
-        Map<String, String> map = new HashMap<>();
-        if (query == null || query.isEmpty()) return map;
-        for (String param : query.split("&")) {
-            String[] parts = param.split("=");
-            if (parts.length > 1) map.put(parts[0], parts[1]);
-        }
-        return map;
-    }
-
     /**
      * Punto de entrada de la aplicación.
      */
-    public static void main(String[] args) {
-        Logger logger = Logger.getLogger(DiskNodeServer.class.getName());
-
-        // Modo personalizado: iniciar un solo nodo
-        if (args.length > 0 && args[0].startsWith("--port=")) {
-            String portStr = null, storagePath = null;
-            for (String arg : args) {
-                if (arg.startsWith("--port=")) {
-                    portStr = arg.substring("--port=".length());
-                } else if (arg.startsWith("--storage=")) {
-                    storagePath = arg.substring("--storage=".length());
-                }
-            }
-
-            if (portStr == null || storagePath == null) {
-                logger.severe("Faltan argumentos. Uso esperado: --port=8001 --storage=./storage1");
-                return;
-            }
-
-            try {
-                int port = Integer.parseInt(portStr);
-                DiskNodeConfig cfg = new DiskNodeConfig("127.0.0.1", port, storagePath, 4096,1073741824); // Usa blockSize fijo
-                new DiskNodeServer(cfg).start();
-            } catch (Exception e) {
-                logger.severe("Error al iniciar nodo personalizado: " + e.getMessage());
-            }
+    public static void main(String[] args) throws IOException, ParserConfigurationException, SAXException {
+        // Ejemplo de invocación en modo personalizado
+        if (args.length >= 2 && args[0].startsWith("--port=") && args[1].startsWith("--storage=")) {
+            int port = Integer.parseInt(args[0].substring(7));
+            String storage = args[1].substring(10);
+            DiskNodeConfig cfg = new DiskNodeConfig("127.0.0.1", port, storage, 4096, 1073741824);
+            new DiskNodeServer(cfg).start();
             return;
         }
-
-        // Modo por defecto: cargar desde XML y omitir algunos nodos
-        try {
-            Set<Integer> omitidos = new HashSet<>();
-            for (String arg : args) {
-                omitidos.add(Integer.parseInt(arg)); // Puertos omitidos
-            }
-
-            List<DiskNodeConfig> configs = DiskNodeConfig.loadAllFromFile("tecmfs-disknode/disknodes.xml");
-            for (DiskNodeConfig cfg : configs) {
-                if (omitidos.contains(cfg.getPort())) {
-                    logger.info("Nodo en puerto " + cfg.getPort() + " fue omitido por simulación de falla.");
-                    continue;
-                }
-
-                new Thread(() -> {
-                    try {
-                        new DiskNodeServer(cfg).start();
-                    } catch (Exception e) {
-                        logger.severe("Error al iniciar nodo en puerto " + cfg.getPort() + ": " + e.getMessage());
-                    }
-                }).start();
-            }
-        } catch (Exception e) {
-            logger.severe("Error al leer configuración: " + e.getMessage());
+        // Modo por defecto: cargar múltiples nodos desde XML
+        List<DiskNodeConfig> configs = DiskNodeConfig.loadAllFromFile("tecmfs-disknode/disknodes.xml");
+        for (DiskNodeConfig cfg : configs) {
+            new Thread(() -> {
+                try { new DiskNodeServer(cfg).start(); }
+                catch (IOException e) { logger.severe("Error al iniciar nodo: " + e.getMessage()); }
+            }).start();
         }
     }
-
 }
