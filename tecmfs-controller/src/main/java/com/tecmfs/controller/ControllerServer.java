@@ -313,7 +313,10 @@ public class ControllerServer {
             ControllerConfig cfg = ControllerConfig.loadFromFile("config.xml");
             MetadataManager mm = new MetadataManager();
             FileDistributor fd = new FileDistributor(mm, cfg);
-            NodeMonitor nm = new NodeMonitor(mm, fd, cfg);
+            NodeMonitor nm = new NodeMonitor(
+                    "tecmfs-disknode/disknodes.xml",
+                    cfg.getMonitorInterval()
+            );
             ControllerServer server = new ControllerServer(cfg, mm, fd, nm);
             server.start();
         } catch (Exception e) {

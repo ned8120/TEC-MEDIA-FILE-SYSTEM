@@ -1,16 +1,14 @@
 package com.tecmfs.controller;
 
-import com.tecmfs.common.models.Block;
-import com.tecmfs.common.models.Stripe;
-import com.tecmfs.controller.config.ControllerConfig;
-import com.tecmfs.controller.models.StoredFile;
-import com.tecmfs.controller.models.NodeStatus;
+import com.tecmfs.disknode.config.DiskNodeConfig;
 import java.io.IOException;
-import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
-import java.time.Instant;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -19,114 +17,48 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Consulta periódicamente el estado de los Disk Nodes, actualiza su blockCount
- * y reconstruye bloques faltantes si un nodo está inactivo.
+ * Monitorea el estado y la configuración de los Disk Nodes definidos en disknodes.xml.
+ * Mantiene una lista de nodos disponibles que han respondido OK y cuyos parámetros coinciden.
  */
 public class NodeMonitor {
     private static final Logger logger = Logger.getLogger(NodeMonitor.class.getName());
 
-    private final MetadataManager metadataManager;
-    private final FileDistributor distributor;
-    private final List<String> nodeEndpoints;
+    private final List<DiskNodeConfig> nodeConfigs;
     private final ScheduledExecutorService executor;
-    private final int intervalSeconds;
+    private final long intervalSeconds;
+    private final Set<String> availableNodes;
 
-    public NodeMonitor(MetadataManager metadataManager,
-                       FileDistributor distributor,
-                       ControllerConfig config) {
-        this.metadataManager = metadataManager;
-        this.distributor = distributor;
-        this.nodeEndpoints = config.getDiskNodeEndpoints();
-        this.intervalSeconds = config.getMonitorInterval();
+    // Valores esperados (tomados del primer nodo al inicio)
+    private final int expectedBlockSize;
+    private final long expectedCapacity;
+
+    /**
+     * @param xmlPath         ruta a disknodes.xml
+     * @param intervalSeconds frecuencia de chequeo en segundos
+     */
+    public NodeMonitor(String xmlPath, long intervalSeconds) throws Exception {
+        this.nodeConfigs = DiskNodeConfig.loadAllFromFile(xmlPath);
+        if (nodeConfigs.isEmpty()) {
+            throw new IllegalStateException("No se encontraron configuraciones de Disk Nodes en " + xmlPath);
+        }
+        this.intervalSeconds = intervalSeconds;
         this.executor = Executors.newSingleThreadScheduledExecutor();
+        this.availableNodes = ConcurrentHashMap.newKeySet();
+
+        // Tomamos como referencia el primer nodo
+        DiskNodeConfig ref = nodeConfigs.get(0);
+        this.expectedBlockSize = ref.getBlockSize();
+        this.expectedCapacity = ref.getCapacityBytes();
+        logger.info(String.format("Referencia de configuración: blockSize=%d, capacityBytes=%d",
+                expectedBlockSize, expectedCapacity));
     }
 
     /**
      * Inicia el monitoreo periódico.
      */
     public void start() {
-        executor.scheduleAtFixedRate(this::checkAllNodes, 0, intervalSeconds, TimeUnit.SECONDS);
-        logger.info("NodeMonitor iniciado con intervalo " + intervalSeconds + " segs");
-    }
-
-    private void checkAllNodes() {
-        for (String endpoint : nodeEndpoints) {
-            boolean alive = isNodeAlive(endpoint);
-            metadataManager.updateNodeStatus(endpoint, alive);
-
-            if (alive) {
-                try {
-                    int count = fetchBlockCount(endpoint);
-                    // Actualiza el número de bloques almacenados
-                    for (NodeStatus ns : metadataManager.getAllNodeStatus()) {
-                        if (ns.getNodeId().equals(endpoint)) {
-                            ns.setStoredBlockCount(count);
-                            logger.info("Node " + endpoint + " blockCount=" + count);
-                            break;
-                        }
-                    }
-                } catch (Exception e) {
-                    logger.warning("No se pudo obtener blockCount de " + endpoint + ": " + e.getMessage());
-                }
-            } else {
-                logger.warning("Node no disponible: " + endpoint);
-                reconstructMissingBlocks(nodeEndpoints.indexOf(endpoint));
-            }
-        }
-    }
-
-    private boolean isNodeAlive(String endpoint) {
-        try {
-            URL url = new URL(endpoint + "/nodeStatus");
-            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-            conn.setRequestMethod("GET");
-            conn.setConnectTimeout(2000);
-            int code = conn.getResponseCode();
-            conn.disconnect();
-            return code == 200;
-        } catch (Exception e) {
-            return false;
-        }
-    }
-
-    private int fetchBlockCount(String endpoint) throws IOException {
-        URL url = new URL(endpoint + "/nodeStatus");
-        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-        conn.setRequestMethod("GET");
-        conn.setConnectTimeout(2000);
-        int code = conn.getResponseCode();
-        if (code != 200) throw new IOException("HTTP " + code);
-        InputStream is = conn.getInputStream();
-        String body = new String(is.readAllBytes());
-        conn.disconnect();
-        Pattern p = Pattern.compile("\\\"blockCount\\\"\\s*:\\s*(\\d+)");
-        Matcher m = p.matcher(body);
-        if (m.find()) {
-            return Integer.parseInt(m.group(1));
-        }
-        throw new IOException("blockCount no encontrado en respuesta");
-    }
-
-    private void reconstructMissingBlocks(int missingNodeIndex) {
-        List<StoredFile> files = metadataManager.getAllStoredFiles();
-        for (StoredFile sf : files) {
-            for (Stripe stripe : sf.getStripes()) {
-                Block blk = stripe.getBlock(missingNodeIndex);
-                if (blk == null || blk.isCorrupted()) {
-                    try {
-                        Block recovered = stripe.reconstructBlock(missingNodeIndex);
-                        String endpoint = nodeEndpoints.get(missingNodeIndex);
-                        distributor.sendBlock(endpoint, recovered);
-                        logger.info("Reconstrucción: stripe=" + stripe.getStripeId()
-                                + " pos=" + missingNodeIndex
-                                + " -> enviado a " + endpoint);
-                    } catch (Exception ex) {
-                        logger.severe("Error reconstruyendo stripe " + stripe.getStripeId()
-                                + ": " + ex.getMessage());
-                    }
-                }
-            }
-        }
+        executor.scheduleAtFixedRate(this::checkNodes, 0, intervalSeconds, TimeUnit.SECONDS);
+        logger.info("NodeMonitor iniciado; chequeo cada " + intervalSeconds + " segs");
     }
 
     /**
@@ -136,4 +68,65 @@ public class NodeMonitor {
         executor.shutdownNow();
         logger.info("NodeMonitor detenido");
     }
+
+    /**
+     * Realiza la consulta a cada nodo y actualiza la lista de disponibles.
+     */
+    private void checkNodes() {
+        Set<String> good = new HashSet<>();
+        Pattern patBS = Pattern.compile("\\\"blockSize\\\"\\s*:\\s*(\\d+)");
+        Pattern patCap = Pattern.compile("\\\"capacityBytes\\\"\\s*:\\s*(\\d+)");
+
+        for (DiskNodeConfig cfg : nodeConfigs) {
+            String endpoint = String.format("http://%s:%d/nodeStatus", cfg.getIp(), cfg.getPort());
+            try {
+                HttpURLConnection conn = (HttpURLConnection) new URL(endpoint).openConnection();
+                conn.setRequestMethod("GET");
+                conn.setConnectTimeout(2000);
+                if (conn.getResponseCode() != 200) {
+                    logger.warning("Nodo no responde 200 en /nodeStatus: " + endpoint);
+                    conn.disconnect();
+                    continue;
+                }
+                String body;
+                try (var is = conn.getInputStream()) {
+                    body = new String(is.readAllBytes());
+                }
+                conn.disconnect();
+
+                Matcher mBS = patBS.matcher(body);
+                Matcher mCap = patCap.matcher(body);
+                if (!mBS.find() || !mCap.find()) {
+                    logger.warning("Formato JSON inesperado de /nodeStatus en: " + endpoint);
+                    continue;
+                }
+                int bs = Integer.parseInt(mBS.group(1));
+                long cap = Long.parseLong(mCap.group(1));
+                if (bs != expectedBlockSize) {
+                    logger.warning("blockSize no coincide en " + endpoint + ": " + bs);
+                    continue;
+                }
+                if (cap != expectedCapacity) {
+                    logger.warning("capacityBytes no coincide en " + endpoint + ": " + cap);
+                    continue;
+                }
+
+                good.add(endpoint);
+            } catch (IOException e) {
+                logger.warning("Error contactando a nodo " + endpoint + ": " + e.getMessage());
+            }
+        }
+
+        availableNodes.clear();
+        availableNodes.addAll(good);
+        logger.info("Nodos disponibles: " + availableNodes);
+    }
+
+    /**
+     * @return lista inmutable de endpoints que están activos y válidos
+     */
+    public Set<String> getAvailableNodes() {
+        return Collections.unmodifiableSet(availableNodes);
+    }
 }
+
