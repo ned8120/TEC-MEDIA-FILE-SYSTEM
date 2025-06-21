@@ -28,13 +28,20 @@ public class MetadataManager {
         logger.info("StoredFile registrado: " + storedFile.getFileId());
     }
 
-
     /**
      * Recupera un StoredFile por su ID.
-     * (Actualmente no se usa, pero puede ser útil para descargar/reconstruir)
      */
     public StoredFile getStoredFile(String fileId) {
         return filesMap.get(fileId);
+    }
+
+    /**
+     * Elimina un StoredFile por su ID.
+     */
+    public void removeFile(String fileId) {
+        if (filesMap.remove(fileId) != null) {
+            logger.info("StoredFile eliminado: " + fileId);
+        }
     }
 
     /**
@@ -52,7 +59,6 @@ public class MetadataManager {
         NodeStatus status = nodeStatusMap.computeIfAbsent(
                 nodeId, id -> new NodeStatus(id, alive)
         );
-        // Llamamos al método real de NodeStatus
         status.updateStatus(alive);
         logger.info("NodeStatus actualizado: " + nodeId + " -> " + alive);
     }
@@ -60,10 +66,6 @@ public class MetadataManager {
     /**
      * Obtiene el estado de todos los Disk Nodes.
      */
-    public void removeFile(String fileId) {
-        filesMap.remove(fileId);
-        logger.info("StoredFile eliminado: " + fileId);
-    }
     public List<NodeStatus> getAllNodeStatus() {
         return new ArrayList<>(nodeStatusMap.values());
     }
