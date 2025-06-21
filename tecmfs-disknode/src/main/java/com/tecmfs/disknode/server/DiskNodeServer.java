@@ -82,7 +82,7 @@ public class DiskNodeServer {
                         .sum();
                 // Prever tamaño de bloque fija
                 if (usedBytes + config.getBlockSize() > config.getCapacityBytes()) {
-                    exchange.sendResponseHeaders(400, -1); // Storage Insufficient
+                    exchange.sendResponseHeaders(507, -1); // Storage Insufficient
                     return;
                 }
             } catch (IOException e) {
@@ -129,22 +129,32 @@ public class DiskNodeServer {
         }
 
     }
-class StatusHandler implements HttpHandler {
-        @Override public void handle(HttpExchange ex) throws IOException {
-            if (!"GET".equals(ex.getRequestMethod())) { ex.sendResponseHeaders(405,-1); return; }
-
-            long used = Files.list(Paths.get(config.getStoragePath()))
-                    .mapToLong(p -> p.toFile().length()).sum();
+    /**
+     * Handler para estado del nodo.
+     * Devuelve JSON con: status, blockSize, capacityBytes, usedBytes.
+     */
+    class StatusHandler implements HttpHandler {
+        @Override public void handle(HttpExchange exchange) throws IOException {
+            if (!"GET".equals(exchange.getRequestMethod())) {
+                exchange.sendResponseHeaders(405, -1);
+                return;
+            }
+            Path storageDir = Paths.get(config.getStoragePath());
+            long usedBytes = Files.walk(storageDir)
+                    .filter(Files::isRegularFile)
+                    .mapToLong(p -> p.toFile().length())
+                    .sum();
             String json = String.format(
                     "{\"status\":\"active\",\"blockSize\":%d,\"capacityBytes\":%d,\"usedBytes\":%d}",
-                    config.getBlockSize(), config.getCapacityBytes(), used);
-
-            ex.getResponseHeaders().add("Content-Type", "application/json");
-            ex.sendResponseHeaders(200, json.getBytes().length);
-            try (OutputStream os = ex.getResponseBody()) { os.write(json.getBytes()); }
+                    config.getBlockSize(), config.getCapacityBytes(), usedBytes);
+            exchange.getResponseHeaders().add("Content-Type","application/json");
+            byte[] resp = json.getBytes();
+            exchange.sendResponseHeaders(200, resp.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(resp);
+            }
         }
     }
-
     /**
      * Handler para recuperar un bloque.
      */

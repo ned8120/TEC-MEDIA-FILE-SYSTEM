@@ -5,6 +5,7 @@ import javax.xml.parsers.*;
 import org.xml.sax.SAXException;
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Paths;
 import java.util.*;
 import java.util.logging.Logger;
 
@@ -24,7 +25,7 @@ public class DiskNodeConfig {
     public DiskNodeConfig(String ip, int port, String storagePath, int blockSize, long capacityBytes) {
         this.ip = ip;
         this.port = port;
-        this.storagePath = storagePath;
+        this.storagePath = Paths.get(storagePath).toAbsolutePath().toString();
         this.blockSize = blockSize;
         this.capacityBytes = capacityBytes;
     }
