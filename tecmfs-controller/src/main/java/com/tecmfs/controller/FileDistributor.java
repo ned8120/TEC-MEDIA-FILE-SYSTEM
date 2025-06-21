@@ -139,24 +139,30 @@ public class FileDistributor {
             // recolectamos bloques
             byte[][] blocks = new byte[n][];
             boolean[] available = new boolean[n];
-            int missing = -1;
+            List<Integer> missingPositions = new ArrayList<>();
             for (int i = 0; i < n; i++) {
                 try {
                     blocks[i] = fetchBlock(activeNodes.get(i), stripe.getBlock(i).getBlockId());
                     available[i] = true;
                 } catch (IOException e) {
-                    missing = i;
+                    missingPositions.add(i);
                     available[i] = false;
                 }
             }
-            // si falta alguno, reconstruimos
-            if (missing >= 0) {
-                Stripe tmp = stripe;
-                Block recovered = tmp.reconstructBlock(missing);
-                blocks[missing] = recovered.getData();
-                sendBlock(activeNodes.get(missing), recovered);
-                logger.info("Reconstruido bloque " + missing + " de stripe " + stripe.getStripeId());
-            }
+    // Verificamos cuántos bloques faltan
+                if (missingPositions.size() > 1) {
+                    logger.warning(" No se puede reconstruir stripe " + stripe.getStripeId()
+                            + ": múltiples bloques perdidos → " + missingPositions);
+                    continue;
+                }
+
+                if (missingPositions.size() == 1) {
+                    int missing = missingPositions.get(0);
+                    Block recovered = stripe.reconstructBlock(missing);
+                    blocks[missing] = recovered.getData();
+                    sendBlock(activeNodes.get(missing), recovered);
+                    logger.info(" Reconstruido bloque " + missing + " de stripe " + stripe.getStripeId());
+                }
             // escribimos datos (ignoramos paridad)
             for (int i = 0; i < n; i++) {
                 Block b = stripe.getBlock(i);
