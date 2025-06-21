@@ -45,15 +45,14 @@ public class ControllerServer {
         this.distributor = distributor;
         this.nodeMonitor = nodeMonitor;
 
-        InetSocketAddress addr = new InetSocketAddress(config.getPort());
-        server = HttpServer.create(addr, 0);
+        server = HttpServer.create(new InetSocketAddress(config.getPort()), 0);
         server.createContext("/uploadFile", new UploadHandler());
         server.createContext("/downloadFile", new DownloadHandler());
         server.createContext("/nodeStatus", new NodeStatusHandler());
         server.createContext("/listFiles", new ListFilesHandler());
         server.createContext("/deleteFile", new DeleteHandler());
-        server.createContext("/getNodes", new GetNodesHandler());  // Nuevo endpoint
-
+        server.createContext("/getNodes", new GetNodesHandler());
+        server.createContext("/detailedClusterStatus", new DetailedClusterStatusHandler());
         server.setExecutor(null);
     }
 
@@ -279,6 +278,26 @@ public class ControllerServer {
         }
     }
 
+    class DetailedClusterStatusHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange ex) throws IOException {
+            if (!"GET".equals(ex.getRequestMethod())) {
+                ex.sendResponseHeaders(405,-1);
+                ex.close();
+                return;
+            }
+            Map<String,String> details = metadataManager.getAllDetailedNodeStatus();
+            String json = details.entrySet().stream()
+                    .map(e -> String.format(
+                            "{\"nodeId\":\"%s\",\"details\":%s}",
+                            e.getKey(), e.getValue()))
+                    .collect(Collectors.joining(",","[","]"));
+            byte[] b=json.getBytes();
+            ex.getResponseHeaders().add("Content-Type","application/json");
+            ex.sendResponseHeaders(200,b.length);
+            try(OutputStream os=ex.getResponseBody()){os.write(b);}
+        }
+    }
     /**
      * Handler para devolver solo nodos activos con detalles extra.
      * Incluye nodeId, active, storedBlockCount y lastResponseTime.
@@ -328,7 +347,8 @@ public class ControllerServer {
             MetadataManager mm = new MetadataManager();
             NodeMonitor nm = new NodeMonitor(
                     "tecmfs-disknode/disknodes.xml",
-                    cfg.getMonitorInterval()
+                    cfg.getMonitorInterval(),
+                    mm
             );
             FileDistributor fd = new FileDistributor(mm, cfg, nm);
             ControllerServer server = new ControllerServer(cfg, mm, fd, nm);

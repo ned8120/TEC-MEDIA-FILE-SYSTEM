@@ -1,16 +1,18 @@
 package com.tecmfs.controller;
 
-import com.tecmfs.controller.models.StoredFile;
 import com.tecmfs.controller.models.NodeStatus;
+import com.tecmfs.controller.models.StoredFile;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.logging.Logger;
 
 /**
  * Gestiona los metadatos de archivos y estados de Disk Nodes.
+ * Incluye almacenamiento de información detallada obtenida de cada nodo.
  */
 public class MetadataManager {
     private static final Logger logger = Logger.getLogger(MetadataManager.class.getName());
@@ -19,6 +21,8 @@ public class MetadataManager {
     private final ConcurrentMap<String, StoredFile> filesMap = new ConcurrentHashMap<>();
     // Mapa nodeId -> NodeStatus
     private final ConcurrentMap<String, NodeStatus> nodeStatusMap = new ConcurrentHashMap<>();
+    // Mapa nodeId -> JSON detallado (/detailedNodeStatus)
+    private final ConcurrentMap<String, String> detailedStatusMap = new ConcurrentHashMap<>();
 
     /**
      * Registra un nuevo archivo en el sistema.
@@ -68,5 +72,21 @@ public class MetadataManager {
      */
     public List<NodeStatus> getAllNodeStatus() {
         return new ArrayList<>(nodeStatusMap.values());
+    }
+
+    /**
+     * Almacena o actualiza la información detallada JSON para un Disk Node.
+     * Se espera que provenga del endpoint /detailedNodeStatus.
+     */
+    public void updateDetailedNodeStatus(String nodeId, String detailedJson) {
+        detailedStatusMap.put(nodeId, detailedJson);
+        logger.fine("Detailed status actualizado para: " + nodeId);
+    }
+
+    /**
+     * Retorna un map inmutable con el JSON detallado de cada nodo.
+     */
+    public Map<String, String> getAllDetailedNodeStatus() {
+        return Map.copyOf(detailedStatusMap);
     }
 }

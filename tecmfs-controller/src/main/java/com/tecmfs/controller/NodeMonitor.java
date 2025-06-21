@@ -1,14 +1,12 @@
 package com.tecmfs.controller;
 
 import com.tecmfs.disknode.config.DiskNodeConfig;
-import java.io.IOException;
 import java.net.HttpURLConnection;
+import java.io.IOException;
 import java.net.URL;
-import java.util.Collections;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -16,34 +14,37 @@ import java.util.logging.Logger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/**
- * Monitorea el estado y la configuración de los Disk Nodes definidos en disknodes.xml.
- * Mantiene una lista de nodos disponibles que han respondido OK y cuyos parámetros coinciden.
- */
 public class NodeMonitor {
     private static final Logger logger = Logger.getLogger(NodeMonitor.class.getName());
 
     private final List<DiskNodeConfig> nodeConfigs;
     private final ScheduledExecutorService executor;
     private final long intervalSeconds;
-    private final Set<String> availableNodes;
+    private final Set<String> availableNodes = ConcurrentHashMap.newKeySet();
 
-    // Valores esperados (tomados del primer nodo al inicio)
+    // Para guardar el estado resumido en MetadataManager
+    private final MetadataManager metadataManager;
+
+    // Parámetros esperados (del primer nodo)
     private final int expectedBlockSize;
     private final long expectedCapacity;
 
     /**
+     * Crea un monitor de nodos.
+     *
      * @param xmlPath         ruta a disknodes.xml
      * @param intervalSeconds frecuencia de chequeo en segundos
+     * @param mm              instancia de MetadataManager donde se guardarán los estados
      */
-    public NodeMonitor(String xmlPath, long intervalSeconds) throws Exception {
+    public NodeMonitor(String xmlPath, long intervalSeconds, MetadataManager mm) throws Exception {
         this.nodeConfigs = DiskNodeConfig.loadAllFromFile(xmlPath);
         if (nodeConfigs.isEmpty()) {
             throw new IllegalStateException("No se encontraron configuraciones de Disk Nodes en " + xmlPath);
         }
+
         this.intervalSeconds = intervalSeconds;
         this.executor = Executors.newSingleThreadScheduledExecutor();
-        this.availableNodes = ConcurrentHashMap.newKeySet();
+        this.metadataManager = mm;
 
         // Tomamos como referencia el primer nodo
         DiskNodeConfig ref = nodeConfigs.get(0);
@@ -53,41 +54,41 @@ public class NodeMonitor {
                 expectedBlockSize, expectedCapacity));
     }
 
-    /**
-     * Inicia el monitoreo periódico.
-     */
+    /** Inicia el monitoreo periódico */
     public void start() {
         executor.scheduleAtFixedRate(this::checkNodes, 0, intervalSeconds, TimeUnit.SECONDS);
         logger.info("NodeMonitor iniciado; chequeo cada " + intervalSeconds + " segs");
     }
 
-    /**
-     * Detiene el monitoreo.
-     */
+    /** Detiene el monitoreo */
     public void shutdown() {
         executor.shutdownNow();
         logger.info("NodeMonitor detenido");
     }
 
-    /**
-     * Realiza la consulta a cada nodo y actualiza la lista de disponibles.
-     */
+    /** Ejecuta un ciclo de chequeo de todos los nodos */
     private void checkNodes() {
-        Set<String> good = new HashSet<>();
-        Pattern patBS = Pattern.compile("\\\"blockSize\\\"\\s*:\\s*(\\d+)");
-        Pattern patCap = Pattern.compile("\\\"capacityBytes\\\"\\s*:\\s*(\\d+)");
+        Set<String> goodSummaries = new HashSet<>();
+
+        // Patterns para extraer blockSize y capacityBytes de /nodeStatus
+        Pattern patBS = Pattern.compile("\"blockSize\"\\s*:\\s*(\\d+)");
+        Pattern patCap = Pattern.compile("\"capacityBytes\"\\s*:\\s*(\\d+)");
 
         for (DiskNodeConfig cfg : nodeConfigs) {
-            String endpoint = String.format("http://%s:%d/nodeStatus", cfg.getIp(), cfg.getPort());
+            String base = String.format("http://%s:%d", cfg.getIp(), cfg.getPort());
+            String summaryUrl = base + "/nodeStatus";
+
             try {
-                HttpURLConnection conn = (HttpURLConnection) new URL(endpoint).openConnection();
+                var conn = (HttpURLConnection) new URL(summaryUrl).openConnection();
                 conn.setRequestMethod("GET");
                 conn.setConnectTimeout(2000);
                 if (conn.getResponseCode() != 200) {
-                    logger.warning("Nodo no responde 200 en /nodeStatus: " + endpoint);
+                    logger.warning("No responde 200 en /nodeStatus: " + summaryUrl);
                     conn.disconnect();
+                    metadataManager.updateNodeStatus(summaryUrl, false);
                     continue;
                 }
+
                 String body;
                 try (var is = conn.getInputStream()) {
                     body = new String(is.readAllBytes());
@@ -97,36 +98,62 @@ public class NodeMonitor {
                 Matcher mBS = patBS.matcher(body);
                 Matcher mCap = patCap.matcher(body);
                 if (!mBS.find() || !mCap.find()) {
-                    logger.warning("Formato JSON inesperado de /nodeStatus en: " + endpoint);
-                    continue;
-                }
-                int bs = Integer.parseInt(mBS.group(1));
-                long cap = Long.parseLong(mCap.group(1));
-                if (bs != expectedBlockSize) {
-                    logger.warning("blockSize no coincide en " + endpoint + ": " + bs);
-                    continue;
-                }
-                if (cap != expectedCapacity) {
-                    logger.warning("capacityBytes no coincide en " + endpoint + ": " + cap);
+                    logger.warning("JSON inesperado en /nodeStatus de " + summaryUrl);
+                    metadataManager.updateNodeStatus(summaryUrl, false);
                     continue;
                 }
 
-                good.add(endpoint);
+                int bs = Integer.parseInt(mBS.group(1));
+                long cap = Long.parseLong(mCap.group(1));
+                if (bs != expectedBlockSize || cap != expectedCapacity) {
+                    logger.warning("Config difiere en " + summaryUrl + " (bs=" + bs + ", cap=" + cap + ")");
+                    metadataManager.updateNodeStatus(summaryUrl, false);
+                    continue;
+                }
+
+                // Nodo OK: actualizo summary en MetadataManager
+                metadataManager.updateNodeStatus(summaryUrl, true);
+                goodSummaries.add(summaryUrl);
+
+                // Ahora solicito el estado detallado
+                String detailUrl = base + "/detailedNodeStatus";
+                try {
+                    var c2 = (HttpURLConnection) new URL(detailUrl).openConnection();
+                    c2.setRequestMethod("GET");
+                    c2.setConnectTimeout(2000);
+                    if (c2.getResponseCode() == 200) {
+                        String detailJson;
+                        try (var is2 = c2.getInputStream()) {
+                            detailJson = new String(is2.readAllBytes());
+                        }
+                        metadataManager.updateDetailedNodeStatus(summaryUrl, detailJson);
+                    } else {
+                        logger.warning("No responde 200 en /detailedNodeStatus: " + detailUrl);
+                    }
+                    c2.disconnect();
+                } catch (IOException e) {
+                    logger.warning("Error en detallado de " + detailUrl + ": " + e.getMessage());
+                }
+
             } catch (IOException e) {
-                logger.warning("Error contactando a nodo " + endpoint + ": " + e.getMessage());
+                logger.warning("Error contactando a " + summaryUrl + ": " + e.getMessage());
+                metadataManager.updateNodeStatus(summaryUrl, false);
             }
         }
 
+        // Actualizo la lista interna
         availableNodes.clear();
-        availableNodes.addAll(good);
+        availableNodes.addAll(goodSummaries);
         logger.info("Nodos disponibles: " + availableNodes);
     }
 
-    /**
-     * @return lista inmutable de endpoints que están activos y válidos
-     */
+    /** Devuelve la lista de endpoints de nodeStatus que están activos */
     public Set<String> getAvailableNodes() {
         return Collections.unmodifiableSet(availableNodes);
     }
-}
 
+    /** Opcional: si quieres exponerlos directamente */
+    public Map<String,String> getAllDetailedNodeStatusRaw() {
+        return metadataManager.getAllDetailedNodeStatus();
+    }
+}
