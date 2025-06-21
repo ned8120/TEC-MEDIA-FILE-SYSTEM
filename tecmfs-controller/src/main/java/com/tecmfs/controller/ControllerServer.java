@@ -252,62 +252,22 @@ public class ControllerServer {
     }
 
     /**
-     * Handler para consultar estado de los Disk Nodes.
+     * Handler para consultar estado de los Disk Nodes (detallado).
+     * Usa metadataManager, que NodeMonitor actualiza periódicamente.
      */
     class NodeStatusHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
-            logger.info("Solicitud recibida: " + exchange.getRequestMethod() + " " + exchange.getRequestURI());
             if (!"GET".equals(exchange.getRequestMethod())) {
                 exchange.sendResponseHeaders(405, -1);
                 exchange.close();
                 return;
             }
-
-            try {
-                List<NodeStatus> statuses = metadataManager.getAllNodeStatus();
-                StringBuilder sb = new StringBuilder();
-                sb.append("[");
-                for (int i = 0; i < statuses.size(); i++) {
-                    NodeStatus ns = statuses.get(i);
-                    sb.append("{\"nodeId\":\"")
-                            .append(ns.getNodeId())
-                            .append("\",\"active\":")
-                            .append(ns.isActive())
-                            .append(",\"lastResponse\":\"")
-                            .append(ns.getLastResponseTime())
-                            .append("\",\"blockCount\":")
-                            .append(ns.getStoredBlockCount())
-                            .append("}");
-                    if (i < statuses.size() - 1) sb.append(",");
-                }
-                sb.append("]");
-                byte[] bytes = sb.toString().getBytes();
-                exchange.getResponseHeaders().add("Content-Type", "application/json");
-                exchange.sendResponseHeaders(200, bytes.length);
-                try (OutputStream os = exchange.getResponseBody()) {
-                    os.write(bytes);
-                }
-            } catch (Exception e) {
-                logger.severe("Error en NodeStatusHandler: " + e.getMessage());
-                exchange.sendResponseHeaders(500, -1);
-            } finally {
-                exchange.close();
-            }
-        }
-    }
-
-    class GetNodesHandler implements HttpHandler {
-        @Override
-        public void handle(HttpExchange exchange) throws IOException {
-            if (!"GET".equals(exchange.getRequestMethod())) {
-                exchange.sendResponseHeaders(405, -1);
-                exchange.close();
-                return;
-            }
-            Set<String> nodes = nodeMonitor.getAvailableNodes();
-            String json = nodes.stream()
-                    .map(u -> "\"" + u + "\"")
+            List<NodeStatus> statuses = metadataManager.getAllNodeStatus();
+            String json = statuses.stream()
+                    .map(ns -> String.format(
+                            "{\"nodeId\":\"%s\",\"active\":%b,\"lastResponse\":\"%s\",\"blockCount\":%d}",
+                            ns.getNodeId(), ns.isActive(), ns.getLastResponseTime(), ns.getStoredBlockCount()))
                     .collect(Collectors.joining(",", "[", "]"));
 
             exchange.getResponseHeaders().add("Content-Type", "application/json");
@@ -320,8 +280,37 @@ public class ControllerServer {
     }
 
     /**
-     * Parseo simple de query string.
+     * Handler para devolver solo nodos activos con detalles extra.
+     * Incluye nodeId, active, storedBlockCount y lastResponseTime.
      */
+    class GetNodesHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if (!"GET".equals(exchange.getRequestMethod())) {
+                exchange.sendResponseHeaders(405, -1);
+                exchange.close();
+                return;
+            }
+            // Obtener lista de NodeStatus actual desde MetadataManager
+            List<NodeStatus> statuses = metadataManager.getAllNodeStatus();
+            // Filtrar activos y convertir a JSON de objetos
+            String json = statuses.stream()
+                    .filter(NodeStatus::isActive)
+                    .map(ns -> String.format(
+                            "{\"nodeId\":\"%s\",\"active\":%b,\"storedBlocks\":%d,\"lastResponse\":\"%s\"}",
+                            ns.getNodeId(), ns.isActive(), ns.getStoredBlockCount(), ns.getLastResponseTime()
+                    ))
+                    .collect(Collectors.joining(",", "[", "]"));
+
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            byte[] resp = json.getBytes();
+            exchange.sendResponseHeaders(200, resp.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(resp);
+            }
+        }
+    }
+
     private static Map<String, String> queryToMap(String query) {
         Map<String, String> map = new HashMap<>();
         if (query == null || query.isEmpty()) return map;
@@ -332,9 +321,6 @@ public class ControllerServer {
         return map;
     }
 
-    /**
-     * Punto de entrada. Carga configuración y arranca servicios.
-     */
     public static void main(String[] args) {
         Logger logger = Logger.getLogger(ControllerServer.class.getName());
         try {

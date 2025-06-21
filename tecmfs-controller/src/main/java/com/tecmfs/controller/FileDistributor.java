@@ -11,10 +11,14 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.*;
 import java.util.logging.Logger;
+import java.util.stream.Collectors;
 
 /**
  * Divide archivos en bloques, calcula paridad RAID5 y distribuye bloques entre nodos activos.
  * También reconstruye archivos completos leyendo bloques desde nodos activos.
+ * <p>
+ * Validación de nodos: RAID5 típico utiliza 4 nodos, pero en modo degradado
+ * permite operar con 2 o 3 nodos con advertencia.
  */
 public class FileDistributor {
     private static final Logger logger = Logger.getLogger(FileDistributor.class.getName());
@@ -38,6 +42,7 @@ public class FileDistributor {
      * @param fileName nombre original
      * @param in stream de datos del archivo
      * @return fileId generado
+     * @throws IOException si hay fallo I/O o nodos insuficientes (<2)
      */
     public String distribute(String fileName, InputStream in) throws IOException {
         // 1. Creamos ID único
@@ -55,10 +60,17 @@ public class FileDistributor {
         }
 
         // 3. Obtenemos nodos activos
-        List<String> activeNodes = new ArrayList<>(nodeMonitor.getAvailableNodes());
+        // Obtener nodos activos manteniendo el orden definido en config
+        List<String> activeNodes = config.getDiskNodeEndpoints().stream()
+                .filter(nodeMonitor.getAvailableNodes()::contains)
+                .collect(Collectors.toList());
         int n = activeNodes.size();
+        // Validación de nodos para RAID5
         if (n < 2) {
             throw new IllegalStateException("Se requieren al menos 2 nodos activos, encontrados: " + n);
+        }
+        if (n < 4) {
+            logger.warning("Solo " + n + " nodos activos; RAID5 típico requiere 4 nodos. Operando en modo degradado.");
         }
         int dataCount = n - 1;
 
@@ -192,4 +204,3 @@ public class FileDistributor {
         }
     }
 }
-
