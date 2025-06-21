@@ -5,126 +5,208 @@ import com.tecmfs.common.models.Stripe;
 import com.tecmfs.common.util.ParityCalculator;
 import com.tecmfs.controller.config.ControllerConfig;
 import com.tecmfs.controller.models.StoredFile;
+
 import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.URL;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.UUID;
+import java.util.*;
 import java.util.logging.Logger;
+import java.util.stream.Collectors;
 
 /**
- * Divide archivos en bloques, calcula paridad RAID5 y distribuye bloques entre Disk Nodes.
- * También reconstruye archivos completos leyendo bloques de los Disk Nodes.
+ * Divide archivos en bloques, calcula paridad RAID5 y distribuye bloques entre nodos activos.
+ * También reconstruye archivos completos leyendo bloques desde nodos activos.
+ * <p>
+ * Validación de nodos: RAID5 típico utiliza 4 nodos, pero en modo degradado
+ * permite operar con 2 o 3 nodos con advertencia.
  */
 public class FileDistributor {
     private static final Logger logger = Logger.getLogger(FileDistributor.class.getName());
+
     private final MetadataManager metadataManager;
     private final ControllerConfig config;
+    private final NodeMonitor nodeMonitor;
     private final int blockSize;
-    private final List<String> nodeEndpoints;
 
-    public FileDistributor(MetadataManager metadataManager, ControllerConfig config) {
+    public FileDistributor(MetadataManager metadataManager,
+                           ControllerConfig config,
+                           NodeMonitor nodeMonitor) {
         this.metadataManager = metadataManager;
         this.config = config;
+        this.nodeMonitor = nodeMonitor;
         this.blockSize = config.getBlockSize();
-        this.nodeEndpoints = config.getDiskNodeEndpoints();
     }
 
     /**
-     * Distribuye un archivo: particiona, calcula paridad y envía bloques.
+     * Distribuye un archivo: particiona, calcula paridad y envía bloques a nodos activos.
+     * @param fileName nombre original
+     * @param in stream de datos del archivo
+     * @return fileId generado
+     * @throws IOException si hay fallo I/O o nodos insuficientes (<2)
      */
     public String distribute(String fileName, InputStream in) throws IOException {
+        // 1. Creamos ID único
         String fileId = UUID.randomUUID().toString();
+
+        // 2. Leemos todo en bloques de tamaño fijo
         List<byte[]> dataBlocks = new ArrayList<>();
         try (BufferedInputStream bis = new BufferedInputStream(in)) {
-            byte[] buf = new byte[blockSize]; int r;
-            while ((r = bis.read(buf)) != -1) {
-                if (r < blockSize) {
-                    byte[] p = new byte[r]; System.arraycopy(buf,0,p,0,r);
-                    dataBlocks.add(p);
+            byte[] buf = new byte[blockSize];
+            int read;
+            while ((read = bis.read(buf)) != -1) {
+                byte[] chunk = (read == blockSize) ? buf.clone() : Arrays.copyOf(buf, read);
+                dataBlocks.add(chunk);
+            }
+        }
+
+        // 3. Obtenemos nodos activos
+        // Obtener nodos activos manteniendo el orden definido en config
+        List<String> activeNodes = config.getDiskNodeEndpoints().stream()
+                .filter(nodeMonitor.getAvailableNodes()::contains)
+                .collect(Collectors.toList());
+        int n = activeNodes.size();
+        // Validación de nodos para RAID5
+        if (n < 2) {
+            throw new IllegalStateException("Se requieren al menos 2 nodos activos, encontrados: " + n);
+        }
+        if (n < 4) {
+            logger.warning("Solo " + n + " nodos activos; RAID5 típico requiere 4 nodos. Operando en modo degradado.");
+        }
+        int dataCount = n - 1;
+
+        // 4. Calculamos número de stripes
+        int stripes = (int) Math.ceil((double) dataBlocks.size() / dataCount);
+        List<Stripe> stripeList = new ArrayList<>();
+        int idx = 0;
+
+        for (int s = 0; s < stripes; s++) {
+            // 4.1 recolectamos dataCount bloques (pad con ceros si hace falta)
+            List<byte[]> slice = new ArrayList<>();
+            for (int i = 0; i < dataCount; i++) {
+                if (idx < dataBlocks.size()) {
+                    slice.add(dataBlocks.get(idx++));
                 } else {
-                    dataBlocks.add(buf.clone());
+                    slice.add(new byte[blockSize]);
                 }
             }
-        }
-        int n = nodeEndpoints.size(), dataCount = n-1;
-        int stripes = (int)Math.ceil((double)dataBlocks.size()/dataCount);
-        List<Stripe> list = new ArrayList<>(); int idx=0;
-        for(int s=0;s<stripes;s++){
-            List<byte[]> slice = new ArrayList<>();
-            for(int i=0;i<dataCount;i++){
-                if(idx<dataBlocks.size()) slice.add(dataBlocks.get(idx++));
-                else slice.add(new byte[blockSize]);
+            // 4.2 aseguramos tamaño uniforme
+            for (int i = 0; i < slice.size(); i++) {
+                byte[] b = slice.get(i);
+                if (b.length != blockSize) {
+                    slice.set(i, Arrays.copyOf(b, blockSize));
+                }
             }
-            byte[] par = ParityCalculator.calculateParity(slice);
-            Stripe stripe=new Stripe(fileId+"_s"+s,fileId,s);
-            int parityPos=s%n, di=0;
-            for(int pos=0;pos<n;pos++){
-                Block b;
-                if(pos==parityPos){ b=new Block(stripe.getStripeId()+"_p", par, Block.BlockType.PARITY); }
-                else { b=new Block(stripe.getStripeId()+"_d"+di, slice.get(di), Block.BlockType.DATA); di++; }
-                stripe.setBlock(pos,b);
-                sendBlock(nodeEndpoints.get(pos),b);
+            // 4.3 calculamos paridad
+            byte[] parity = ParityCalculator.calculateParity(slice);
+
+            // 4.4 creamos Stripe y asignamos bloques en round-robin
+            Stripe stripe = new Stripe(fileId + "_stripe" + s, fileId, s);
+            int parityPos = s % n;
+            int dataIdx = 0;
+            for (int pos = 0; pos < n; pos++) {
+                Block blk;
+                if (pos == parityPos) {
+                    blk = new Block(stripe.getStripeId() + "_p", parity, Block.BlockType.PARITY);
+                } else {
+                    blk = new Block(stripe.getStripeId() + "_d" + dataIdx, slice.get(dataIdx), Block.BlockType.DATA);
+                    dataIdx++;
+                }
+                stripe.setBlock(pos, blk);
+                sendBlock(activeNodes.get(pos), blk);
             }
-            list.add(stripe);
-            logger.info("Stripe " + stripe.getStripeId() + " distribuido.");
+            stripeList.add(stripe);
+            logger.info("Stripe " + stripe.getStripeId() + " distribuido");
         }
-        metadataManager.saveStoredFile(new StoredFile(fileId,fileName,list));
+
+        // 5. Guardamos metadatos
+        metadataManager.saveStoredFile(new StoredFile(fileId, fileName, stripeList));
         return fileId;
     }
 
     /**
-     * Reconstruye el archivo completo leyendo bloques, recuperando faltantes.
+     * Reconstruye el archivo completo leyendo y recuperando bloques en nodos activos.
      */
     public InputStream reconstruct(String fileId) throws IOException {
         StoredFile sf = metadataManager.getStoredFile(fileId);
-        if (sf == null) throw new FileNotFoundException("StoredFile " + fileId + " no existe");
+        if (sf == null) {
+            throw new FileNotFoundException("StoredFile " + fileId + " no existe");
+        }
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        for(Stripe stripe: sf.getStripes()){
-            int n=nodeEndpoints.size();
-            Block[] blks=new Block[n]; boolean[] ok=new boolean[n];
-            int missing=-1;
-            for(int i=0;i<n;i++){
-                try{ byte[] data=fetchBlock(nodeEndpoints.get(i),stripe.getBlock(i).getBlockId());
-                    blks[i]=new Block(stripe.getStripeId()+"_r"+i,data,stripe.getBlock(i).getType()); ok[i]=true;
-                }catch(IOException e){ missing=i; }
+        List<String> activeNodes = new ArrayList<>(nodeMonitor.getAvailableNodes());
+        int n = activeNodes.size();
+
+        for (Stripe stripe : sf.getStripes()) {
+            // recolectamos bloques
+            byte[][] blocks = new byte[n][];
+            boolean[] available = new boolean[n];
+            List<Integer> missingPositions = new ArrayList<>();
+            for (int i = 0; i < n; i++) {
+                try {
+                    blocks[i] = fetchBlock(activeNodes.get(i), stripe.getBlock(i).getBlockId());
+                    available[i] = true;
+                } catch (IOException e) {
+                    missingPositions.add(i);
+                    available[i] = false;
+                }
             }
-            if(missing>=0){
-                stripe.setBlock(missing,stripe.reconstructBlock(missing));
-                blks[missing]=stripe.getBlock(missing);
-            }
-            for(int i=0;i<n;i++){
-                if(stripe.getBlock(i).getType()==Block.BlockType.DATA){ baos.write(blks[i].getData()); }
+    // Verificamos cuántos bloques faltan
+                if (missingPositions.size() > 1) {
+                    logger.warning(" No se puede reconstruir stripe " + stripe.getStripeId()
+                            + ": múltiples bloques perdidos → " + missingPositions);
+                    continue;
+                }
+
+                if (missingPositions.size() == 1) {
+                    int missing = missingPositions.get(0);
+                    Block recovered = stripe.reconstructBlock(missing);
+                    blocks[missing] = recovered.getData();
+                    sendBlock(activeNodes.get(missing), recovered);
+                    logger.info(" Reconstruido bloque " + missing + " de stripe " + stripe.getStripeId());
+                }
+            // escribimos datos (ignoramos paridad)
+            for (int i = 0; i < n; i++) {
+                Block b = stripe.getBlock(i);
+                if (b.getType() == Block.BlockType.DATA) {
+                    baos.write(blocks[i]);
+                }
             }
         }
         return new ByteArrayInputStream(baos.toByteArray());
     }
 
     /**
-     * Envía un bloque al Disk Node.
+     * Envía un bloque a un Disk Node.
      */
-    public void sendBlock(String endpoint, Block block) throws IOException {
-        URL url=new URL(endpoint+"/storeBlock?blockId="+block.getBlockId());
-        HttpURLConnection c=(HttpURLConnection)url.openConnection();
-        c.setDoOutput(true); c.setRequestMethod("POST");
-        c.getOutputStream().write(block.getData());
-        if(c.getResponseCode()!=200) logger.warning("Error " + c.getResponseCode());
-        c.disconnect();
+    private void sendBlock(String endpoint, Block block) throws IOException {
+        URL url = new URL(endpoint + "/storeBlock?blockId=" + block.getBlockId());
+        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+        conn.setDoOutput(true);
+        conn.setRequestMethod("POST");
+        try (OutputStream os = conn.getOutputStream()) {
+            os.write(block.getData());
+        }
+        if (conn.getResponseCode() != 200) {
+            logger.warning("Error " + conn.getResponseCode() + " al enviar bloque a " + endpoint);
+        }
+        conn.disconnect();
     }
 
     /**
-     * Lee un bloque desde el Disk Node.
+     * Descarga un bloque de un Disk Node.
      */
     private byte[] fetchBlock(String endpoint, String blockId) throws IOException {
-        URL url=new URL(endpoint+"/getBlock?blockId="+blockId);
-        HttpURLConnection c=(HttpURLConnection)url.openConnection();
-        c.setRequestMethod("GET"); c.connect();
-        if(c.getResponseCode()!=200) throw new IOException("HTTP " + c.getResponseCode());
-        try(InputStream is=c.getInputStream(); ByteArrayOutputStream baos=new ByteArrayOutputStream()){
-            byte[] buf=new byte[8192]; int r;
-            while((r=is.read(buf))!=-1) baos.write(buf,0,r);
-            return baos.toByteArray();
-        }finally{c.disconnect();}
+        URL url = new URL(endpoint + "/getBlock?blockId=" + blockId);
+        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+        conn.setRequestMethod("GET");
+        if (conn.getResponseCode() != 200) {
+            throw new IOException("HTTP " + conn.getResponseCode());
+        }
+        try (InputStream is = conn.getInputStream(); ByteArrayOutputStream buf = new ByteArrayOutputStream()) {
+            byte[] b = new byte[8192]; int r;
+            while ((r = is.read(b)) != -1) buf.write(b, 0, r);
+            return buf.toByteArray();
+        } finally {
+            conn.disconnect();
+        }
     }
 }
