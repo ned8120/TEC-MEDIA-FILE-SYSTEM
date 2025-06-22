@@ -10,7 +10,7 @@ import java.net.URL;
 import java.net.URLEncoder;
 import org.json.JSONArray;
 import org.json.JSONObject;
-
+//Va estar en la nueva branch
 /**
  * Aplicación cliente Swing para visualizar y gestionar el sistema distribuido.
  * Ahora incluye botón para ver estado RAID detallado.
