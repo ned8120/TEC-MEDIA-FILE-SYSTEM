@@ -7,75 +7,120 @@ import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLEncoder;
-import java.util.List;
-import java.util.ArrayList;
 
+/**
+ * Aplicación cliente Swing para visualizar y gestionar el sistema distribuido.
+ * Ahora incluye botón para ver estado RAID detallado.
+ */
 public class GuiApp extends JFrame {
     private JTextArea fileListArea;
     private JTextField fileIdField;
-    private JTextField searchField; // Para buscar archivos por nombre
+    private JTextField searchField;
     private JCheckBox[] nodeBoxes;
     private JButton startNodesBtn;
 
-
     public GuiApp() {
         setTitle("TEC Media File System");
-        setSize(600, 400);
+        setSize(800, 600);
         setDefaultCloseOperation(EXIT_ON_CLOSE);
         setLayout(new BorderLayout());
 
         fileListArea = new JTextArea();
         fileListArea.setEditable(false);
-
         add(new JScrollPane(fileListArea), BorderLayout.CENTER);
-        startNodesBtn = new JButton("Aplicar cambios de estado de nodos");
-        startNodesBtn.addActionListener(e -> startNodes());
 
-        JPanel bottomPanel = new JPanel();
-        // Panel para simular fallas de nodos
+        // Panel de simulación de nodos
         JPanel nodePanel = new JPanel();
         nodePanel.setBorder(BorderFactory.createTitledBorder("Simular caída de nodos"));
         String[] ports = {"8001", "8002", "8003", "8004"};
         nodeBoxes = new JCheckBox[ports.length];
         for (int i = 0; i < ports.length; i++) {
-            nodeBoxes[i] = new JCheckBox("Nodo " + ports[i] + " activo", true); // Marcar = dejar activo
+            nodeBoxes[i] = new JCheckBox("Nodo " + ports[i] + " activo", true);
             nodePanel.add(nodeBoxes[i]);
         }
+        startNodesBtn = new JButton("Aplicar cambios de estado de nodos");
+        startNodesBtn.addActionListener(e -> startNodes());
         nodePanel.add(startNodesBtn);
-
-
         add(nodePanel, BorderLayout.NORTH);
+
+        // Panel inferior con controles de archivos y estado RAID
+        JPanel bottomPanel = new JPanel();
+        fileIdField = new JTextField(15);
+        bottomPanel.add(new JLabel("ID del archivo:"));
+        bottomPanel.add(fileIdField);
 
         JButton uploadBtn = new JButton("Subir PDF");
         JButton downloadBtn = new JButton("Descargar PDF");
         JButton deleteBtn = new JButton("Eliminar PDF");
         JButton refreshBtn = new JButton("Actualizar lista");
+        JButton searchBtn = new JButton("Buscar por nombre");
+        JButton statusBtn = new JButton("Ver estado RAID");  // Nuevo botón
 
-
-        fileIdField = new JTextField(15);
-        bottomPanel.add(new JLabel("ID del archivo:"));
-        bottomPanel.add(fileIdField);
         bottomPanel.add(uploadBtn);
         bottomPanel.add(downloadBtn);
         bottomPanel.add(deleteBtn);
         bottomPanel.add(refreshBtn);
         searchField = new JTextField(10);
-        JButton searchBtn = new JButton("Buscar por nombre");
-
         bottomPanel.add(new JLabel("Nombre contiene:"));
         bottomPanel.add(searchField);
         bottomPanel.add(searchBtn);
+        bottomPanel.add(statusBtn);  // Añadir al panel
 
         add(bottomPanel, BorderLayout.SOUTH);
 
+        // Listeners
         uploadBtn.addActionListener(e -> uploadFile());
         downloadBtn.addActionListener(e -> downloadFile());
         deleteBtn.addActionListener(e -> deleteFile());
         refreshBtn.addActionListener(e -> listFiles());
         searchBtn.addActionListener(e -> listFilesByName());
+        statusBtn.addActionListener(e -> showRaidStatus()); // Acción para ver estado RAID
+
         listFiles();
         setVisible(true);
     }
+
+    /**
+     * Muestra un diálogo con la respuesta del endpoint /detailedClusterStatus.
+     */
+    private void showRaidStatus() {
+        SwingWorker<String, Void> worker = new SwingWorker<>() {
+            @Override
+            protected String doInBackground() {
+                try {
+                    URL url = new URL("http://localhost:7000/detailedClusterStatus");
+                    HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                    conn.setRequestMethod("GET");
+                    if (conn.getResponseCode() != 200) {
+                        return "Error: " + conn.getResponseCode();
+                    }
+                    try (BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()))) {
+                        StringBuilder sb = new StringBuilder();
+                        String line;
+                        while ((line = reader.readLine()) != null) sb.append(line).append("\n");
+                        return sb.toString();
+                    }
+                } catch (IOException ex) {
+                    return "Error: " + ex.getMessage();
+                }
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    String result = get();
+                    JTextArea text = new JTextArea(result);
+                    text.setEditable(false);
+                    JScrollPane scroll = new JScrollPane(text);
+                    scroll.setPreferredSize(new Dimension(600, 400));
+                    JOptionPane.showMessageDialog(GuiApp.this, scroll, "Estado RAID Detallado",
+                            JOptionPane.INFORMATION_MESSAGE);
+                } catch (Exception ignore) {}
+            }
+        };
+        worker.execute();
+    }
+
 
     private void uploadFile() {
         JFileChooser chooser = new JFileChooser();

@@ -41,7 +41,9 @@ public class DiskNodeServer {
         server.createContext("/getBlock", new GetHandler());
         server.createContext("/deleteBlock", new DeleteHandler());
         server.createContext("/nodeStatus", new StatusHandler());
+        server.createContext("/detailedNodeStatus", new DetailedStatusHandler()); // Nuevo endpoint
         server.createContext("/shutdown", new ShutdownHandler());
+        server.setExecutor(null);
 
         server.setExecutor(null);
     }
@@ -187,6 +189,47 @@ public class DiskNodeServer {
                     config.getCapacityBytes()
             );
 
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            byte[] resp = json.getBytes();
+            exchange.sendResponseHeaders(200, resp.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(resp);
+            }
+        }
+    }
+
+    // --- Detailed Status Handler ---
+    class DetailedStatusHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if (!"GET".equals(exchange.getRequestMethod())) {
+                exchange.sendResponseHeaders(405, -1);
+                return;
+            }
+
+            Path dir = Paths.get(config.getStoragePath());
+            List<String> entries;
+            try (Stream<Path> files = Files.list(dir)) {
+                entries = files.filter(p -> p.toString().endsWith(".blk"))
+                        .map(p -> {
+                            try {
+                                String fileName = p.getFileName().toString();
+                                String blockId = fileName.replaceFirst("\\.blk$", "");
+                                String type = blockId.contains("_p") ? "PARITY" : "DATA";
+                                long size = Files.size(p);
+                                long lm = Files.getLastModifiedTime(p).toMillis();
+                                return String.format(
+                                        "{\"blockId\":\"%s\",\"type\":\"%s\",\"size\":%d,\"lastModified\":%d}",
+                                        blockId, type, size, lm);
+                            } catch (IOException e) {
+                                return null;
+                            }
+                        })
+                        .filter(s -> s != null)
+                        .collect(Collectors.toList());
+            }
+
+            String json = "[" + String.join(",", entries) + "]";
             exchange.getResponseHeaders().add("Content-Type", "application/json");
             byte[] resp = json.getBytes();
             exchange.sendResponseHeaders(200, resp.length);
