@@ -97,7 +97,7 @@ public class FileDistributor {
                 }
             }
             // 4.3 calculamos paridad
-            byte[] parity = ParityCalculator.calculateParity(slice);
+            byte[] parity = ParityCalculator.calculateParity((com.tecmfs.common.collections.List<byte[]>) slice);
 
             // 4.4 creamos Stripe y asignamos bloques en round-robin
             Stripe stripe = new Stripe(fileId + "_stripe" + s, fileId, s);

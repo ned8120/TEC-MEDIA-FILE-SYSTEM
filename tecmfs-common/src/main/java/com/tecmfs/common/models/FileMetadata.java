@@ -1,7 +1,6 @@
 package com.tecmfs.common.models;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
+import com.tecmfs.common.collections.MyArrayList;
+import com.tecmfs.common.collections.List;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -35,7 +34,7 @@ public class FileMetadata {
         this.fileSize = Math.max(0, fileSize);
         this.blockSize = Math.max(1, blockSize);
         this.totalBlocks = (int) Math.ceil((double) this.fileSize / this.blockSize);
-        this.stripes = new ArrayList<>();
+        this.stripes = new MyArrayList<>();
         this.integrityVerified = false;
     }
 
@@ -57,8 +56,10 @@ public class FileMetadata {
      */
     public List<Stripe> getStripes() {
         synchronized (stripes) {
+            // Ordena la lista usando tu método 'sort'
             stripes.sort((a, b) -> Integer.compare(a.getStripeIndex(), b.getStripeIndex()));
-            return Collections.unmodifiableList(new ArrayList<>(stripes));
+            // Retorna una copia de la lista, sin envoltura de java.util.Collections
+            return new MyArrayList<>(stripes);
         }
     }
 
@@ -72,12 +73,11 @@ public class FileMetadata {
                 integrityVerified = false;
                 return false;
             }
-            for (Stripe stripe : stripes) {
+            for (Stripe stripe : stripes)
                 if (!stripe.verifyIntegrity()) {
                     integrityVerified = false;
                     return false;
                 }
-            }
             integrityVerified = true;
             return true;
         }

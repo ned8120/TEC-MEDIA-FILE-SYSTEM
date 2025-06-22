@@ -1,5 +1,5 @@
 package com.tecmfs.common.util;
-import java.util.List;
+import com.tecmfs.common.collections.List;
 
 /**
  * Utilidad para cálculo de paridad XOR en bloques de datos.

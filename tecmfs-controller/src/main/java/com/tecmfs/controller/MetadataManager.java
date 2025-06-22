@@ -36,6 +36,7 @@ public class MetadataManager {
      * Recupera un StoredFile por su ID.
      */
     public StoredFile getStoredFile(String fileId) {
+
         return filesMap.get(fileId);
     }
 
