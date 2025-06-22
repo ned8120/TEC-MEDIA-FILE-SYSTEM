@@ -1,12 +1,15 @@
 package com.tecmfs.client;
 
 import javax.swing.*;
+import javax.swing.table.DefaultTableModel;
 import java.awt.*;
 import java.awt.event.*;
 import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLEncoder;
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 /**
  * Aplicación cliente Swing para visualizar y gestionar el sistema distribuido.
@@ -84,43 +87,60 @@ public class GuiApp extends JFrame {
      * Muestra un diálogo con la respuesta del endpoint /detailedClusterStatus.
      */
     private void showRaidStatus() {
-        SwingWorker<String, Void> worker = new SwingWorker<>() {
+        SwingWorker<DefaultTableModel, Void> worker = new SwingWorker<>() {
             @Override
-            protected String doInBackground() {
-                try {
-                    URL url = new URL("http://localhost:7000/detailedClusterStatus");
-                    HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                    conn.setRequestMethod("GET");
-                    if (conn.getResponseCode() != 200) {
-                        return "Error: " + conn.getResponseCode();
-                    }
-                    try (BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()))) {
-                        StringBuilder sb = new StringBuilder();
-                        String line;
-                        while ((line = reader.readLine()) != null) sb.append(line).append("\n");
-                        return sb.toString();
-                    }
-                } catch (IOException ex) {
-                    return "Error: " + ex.getMessage();
+            protected DefaultTableModel doInBackground() throws Exception {
+                String[] cols = {"Nodo","Bloque ID","Tipo","Tamaño (bytes)","Modificado"};
+                DefaultTableModel model = new DefaultTableModel(cols, 0);
+
+                URL url = new URL("http://localhost:7000/detailedClusterStatus");
+                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                conn.setRequestMethod("GET");
+                if (conn.getResponseCode() != 200)
+                    throw new IOException("HTTP " + conn.getResponseCode());
+
+                StringBuilder sb = new StringBuilder();
+                try (BufferedReader r = new BufferedReader(new InputStreamReader(conn.getInputStream()))) {
+                    String line;
+                    while ((line = r.readLine()) != null) sb.append(line);
                 }
+
+                JSONArray nodes = new JSONArray(sb.toString());
+                for (int i = 0; i < nodes.length(); i++) {
+                    JSONObject node = nodes.getJSONObject(i);
+                    String nodeId = node.getString("nodeId");
+                    JSONArray details = node.getJSONArray("details");
+                    for (int j = 0; j < details.length(); j++) {
+                        JSONObject blk = details.getJSONObject(j);
+                        String blockId      = blk.getString("blockId");
+                        String type         = blk.getString("type");
+                        long   size         = blk.getLong("size");
+                        long   lm           = blk.getLong("lastModified");
+                        String modificado   = new java.util.Date(lm).toString();
+                        model.addRow(new Object[]{nodeId, blockId, type, size, modificado});
+                    }
+                }
+                return model;
             }
 
             @Override
             protected void done() {
                 try {
-                    String result = get();
-                    JTextArea text = new JTextArea(result);
-                    text.setEditable(false);
-                    JScrollPane scroll = new JScrollPane(text);
-                    scroll.setPreferredSize(new Dimension(600, 400));
-                    JOptionPane.showMessageDialog(GuiApp.this, scroll, "Estado RAID Detallado",
-                            JOptionPane.INFORMATION_MESSAGE);
-                } catch (Exception ignore) {}
+                    JTable table = new JTable(get());
+                    table.setAutoCreateRowSorter(true);
+                    JScrollPane scroll = new JScrollPane(table);
+                    scroll.setPreferredSize(new Dimension(700,400));
+                    JOptionPane.showMessageDialog(GuiApp.this, scroll,
+                            "Estado RAID Detallado", JOptionPane.INFORMATION_MESSAGE);
+                } catch (Exception ex) {
+                    JOptionPane.showMessageDialog(GuiApp.this,
+                            "Error al obtener estado RAID: " + ex.getMessage(),
+                            "Error", JOptionPane.ERROR_MESSAGE);
+                }
             }
         };
         worker.execute();
     }
-
 
     private void uploadFile() {
         JFileChooser chooser = new JFileChooser();
