@@ -105,14 +105,17 @@ public class FileDistributor {
             int dataIdx = 0;
             for (int pos = 0; pos < n; pos++) {
                 Block blk;
+                String destino = activeNodes.get(pos);
                 if (pos == parityPos) {
                     blk = new Block(stripe.getStripeId() + "_p", parity, Block.BlockType.PARITY);
+                    logger.info(" Creado bloque de PARIDAD: " + blk.getBlockId() + " → Nodo: " + destino);
                 } else {
                     blk = new Block(stripe.getStripeId() + "_d" + dataIdx, slice.get(dataIdx), Block.BlockType.DATA);
+                    logger.info(" Creado bloque de DATOS: " + blk.getBlockId() + " → Nodo: " + destino);
                     dataIdx++;
                 }
                 stripe.setBlock(pos, blk);
-                sendBlock(activeNodes.get(pos), blk);
+                sendBlock(destino, blk);
             }
             stripeList.add(stripe);
             logger.info("Stripe " + stripe.getStripeId() + " distribuido");
@@ -141,33 +144,41 @@ public class FileDistributor {
             boolean[] available = new boolean[n];
             List<Integer> missingPositions = new ArrayList<>();
             for (int i = 0; i < n; i++) {
+                String nodo = activeNodes.get(i);
+                String bloqueId = stripe.getBlock(i).getBlockId();
                 try {
-                    blocks[i] = fetchBlock(activeNodes.get(i), stripe.getBlock(i).getBlockId());
+                    blocks[i] = fetchBlock(nodo, bloqueId);
                     available[i] = true;
+                    logger.info(" Bloque disponible: " + bloqueId + " desde nodo: " + nodo);
                 } catch (IOException e) {
                     missingPositions.add(i);
                     available[i] = false;
+                    logger.warning(" Bloque perdido: " + bloqueId + " en nodo: " + nodo);
                 }
             }
-    // Verificamos cuántos bloques faltan
-                if (missingPositions.size() > 1) {
-                    logger.warning(" No se puede reconstruir stripe " + stripe.getStripeId()
-                            + ": múltiples bloques perdidos → " + missingPositions);
-                    continue;
-                }
 
-                if (missingPositions.size() == 1) {
-                    int missing = missingPositions.get(0);
-                    Block recovered = stripe.reconstructBlock(missing);
-                    blocks[missing] = recovered.getData();
-                    sendBlock(activeNodes.get(missing), recovered);
-                    logger.info(" Reconstruido bloque " + missing + " de stripe " + stripe.getStripeId());
-                }
+            // Verificamos cuántos bloques faltan
+            if (missingPositions.size() > 1) {
+                logger.warning(" No se puede reconstruir stripe " + stripe.getStripeId()
+                        + ": múltiples bloques perdidos → " + missingPositions);
+                continue;
+            }
+
+            if (missingPositions.size() == 1) {
+                int missing = missingPositions.get(0);
+                Block recovered = stripe.reconstructBlock(missing);
+                blocks[missing] = recovered.getData();
+                logger.info("🛠 Reconstruyendo bloque faltante: " + recovered.getBlockId() + " usando paridad");
+                sendBlock(activeNodes.get(missing), recovered);
+                logger.info(" Bloque reconstruido enviado a nodo: " + activeNodes.get(missing));
+            }
+
             // escribimos datos (ignoramos paridad)
             for (int i = 0; i < n; i++) {
                 Block b = stripe.getBlock(i);
                 if (b.getType() == Block.BlockType.DATA) {
                     baos.write(blocks[i]);
+                    logger.info(" Escribiendo bloque de datos: " + b.getBlockId());
                 }
             }
         }
