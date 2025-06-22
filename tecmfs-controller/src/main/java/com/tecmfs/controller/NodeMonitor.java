@@ -113,7 +113,7 @@ public class NodeMonitor {
 
                 // Nodo OK: actualizo summary en MetadataManager
                 metadataManager.updateNodeStatus(summaryUrl, true);
-                goodSummaries.add(summaryUrl);
+                goodSummaries.add(base);
 
                 // Ahora solicito el estado detallado
                 String detailUrl = base + "/detailedNodeStatus";

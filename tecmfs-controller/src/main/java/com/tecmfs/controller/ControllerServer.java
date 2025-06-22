@@ -281,23 +281,27 @@ public class ControllerServer {
     class DetailedClusterStatusHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange ex) throws IOException {
+            System.out.println("Entró a /detailedClusterStatus");
             if (!"GET".equals(ex.getRequestMethod())) {
-                ex.sendResponseHeaders(405,-1);
+                ex.sendResponseHeaders(405, -1);
                 ex.close();
                 return;
             }
-            Map<String,String> details = metadataManager.getAllDetailedNodeStatus();
+            Map<String, String> details = metadataManager.getAllDetailedNodeStatus();
             String json = details.entrySet().stream()
                     .map(e -> String.format(
                             "{\"nodeId\":\"%s\",\"details\":%s}",
                             e.getKey(), e.getValue()))
-                    .collect(Collectors.joining(",","[","]"));
-            byte[] b=json.getBytes();
-            ex.getResponseHeaders().add("Content-Type","application/json");
-            ex.sendResponseHeaders(200,b.length);
-            try(OutputStream os=ex.getResponseBody()){os.write(b);}
+                    .collect(Collectors.joining(",", "[", "]"));
+            byte[] b = json.getBytes();
+            ex.getResponseHeaders().add("Content-Type", "application/json");
+            ex.sendResponseHeaders(200, b.length);
+            try (OutputStream os = ex.getResponseBody()) {
+                os.write(b);
+            }
         }
     }
+
     /**
      * Handler para devolver solo nodos activos con detalles extra.
      * Incluye nodeId, active, storedBlockCount y lastResponseTime.
@@ -343,7 +347,13 @@ public class ControllerServer {
     public static void main(String[] args) {
         Logger logger = Logger.getLogger(ControllerServer.class.getName());
         try {
-            ControllerConfig cfg = ControllerConfig.loadFromFile("config.xml");
+            // 1) Calculamos la ruta al config.xml en la raíz del proyecto:
+            String projectRoot = System.getProperty("user.dir");
+            String configPath = projectRoot + System.getProperty("file.separator") + "config.xml";
+
+            // 2) Lo pasamos al loadFromFile:
+            ControllerConfig cfg = ControllerConfig.loadFromFile(configPath);
+
             MetadataManager mm = new MetadataManager();
             NodeMonitor nm = new NodeMonitor(
                     "tecmfs-disknode/disknodes.xml",
