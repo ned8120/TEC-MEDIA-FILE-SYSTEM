@@ -45,10 +45,10 @@ public class FileDistributor {
      * @throws IOException si hay fallo I/O o nodos insuficientes (<2)
      */
     public String distribute(String fileName, InputStream in) throws IOException {
-        // 1. Creamos ID único
+        // Creamos ID único
         String fileId = UUID.randomUUID().toString();
 
-        // 2. Leemos todo en bloques de tamaño fijo
+        // Leemos todo en bloques de tamaño fijo
         List<byte[]> dataBlocks = new ArrayList<>();
         try (BufferedInputStream bis = new BufferedInputStream(in)) {
             byte[] buf = new byte[blockSize];
@@ -59,7 +59,7 @@ public class FileDistributor {
             }
         }
 
-        // 3. Obtenemos nodos activos
+        // Obtenemos nodos activos
         // Obtener nodos activos manteniendo el orden definido en config
         List<String> activeNodes = config.getDiskNodeEndpoints().stream()
                 .filter(nodeMonitor.getAvailableNodes()::contains)
@@ -74,13 +74,13 @@ public class FileDistributor {
         }
         int dataCount = n - 1;
 
-        // 4. Calculamos número de stripes
+        // Calculamos número de stripes
         int stripes = (int) Math.ceil((double) dataBlocks.size() / dataCount);
         List<Stripe> stripeList = new ArrayList<>();
         int idx = 0;
 
         for (int s = 0; s < stripes; s++) {
-            // 4.1 recolectamos dataCount bloques (pad con ceros si hace falta)
+            // recolectamos dataCount bloques (pad con ceros si hace falta)
             List<byte[]> slice = new ArrayList<>();
             for (int i = 0; i < dataCount; i++) {
                 if (idx < dataBlocks.size()) {
@@ -89,17 +89,17 @@ public class FileDistributor {
                     slice.add(new byte[blockSize]);
                 }
             }
-            // 4.2 aseguramos tamaño uniforme
+            //aseguramos tamaño uniforme
             for (int i = 0; i < slice.size(); i++) {
                 byte[] b = slice.get(i);
                 if (b.length != blockSize) {
                     slice.set(i, Arrays.copyOf(b, blockSize));
                 }
             }
-            // 4.3 calculamos paridad
+            //calculamos paridad
             byte[] parity = ParityCalculator.calculateParity(slice);
 
-            // 4.4 creamos Stripe y asignamos bloques en round-robin
+            //creamos Stripe y asignamos bloques en round-robin
             Stripe stripe = new Stripe(fileId + "_stripe" + s, fileId, s);
             int parityPos = s % n;
             int dataIdx = 0;
@@ -121,7 +121,7 @@ public class FileDistributor {
             logger.info("Stripe " + stripe.getStripeId() + " distribuido");
         }
 
-        // 5. Guardamos metadatos
+        //Guardamos metadatos
         metadataManager.saveStoredFile(new StoredFile(fileId, fileName, stripeList));
         return fileId;
     }

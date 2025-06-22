@@ -198,7 +198,7 @@ public class DiskNodeServer {
         }
     }
 
-    // --- Detailed Status Handler ---
+    //Detailed Status Handler
     class DetailedStatusHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) throws IOException {

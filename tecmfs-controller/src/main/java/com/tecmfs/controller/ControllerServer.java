@@ -347,11 +347,11 @@ public class ControllerServer {
     public static void main(String[] args) {
         Logger logger = Logger.getLogger(ControllerServer.class.getName());
         try {
-            // 1) Calculamos la ruta al config.xml en la raíz del proyecto:
+            //Calculamos la ruta al config.xml en la raíz del proyecto:
             String projectRoot = System.getProperty("user.dir");
             String configPath = projectRoot + System.getProperty("file.separator") + "config.xml";
 
-            // 2) Lo pasamos al loadFromFile:
+            //Lo pasamos al loadFromFile:
             ControllerConfig cfg = ControllerConfig.loadFromFile(configPath);
 
             MetadataManager mm = new MetadataManager();

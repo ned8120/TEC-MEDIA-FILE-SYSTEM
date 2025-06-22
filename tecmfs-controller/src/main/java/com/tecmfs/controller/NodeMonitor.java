@@ -152,7 +152,6 @@ public class NodeMonitor {
         return Collections.unmodifiableSet(availableNodes);
     }
 
-    /** Opcional: si quieres exponerlos directamente */
     public Map<String,String> getAllDetailedNodeStatusRaw() {
         return metadataManager.getAllDetailedNodeStatus();
     }
